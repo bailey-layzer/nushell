@@ -200,12 +200,34 @@ pub fn evaluate(
     Ok(results)
 }
 
+pub fn product(data: Vec<Value>) -> Result<Value, ShellError> {
+    if data.is_empty() {
+        return Err(ShellError::unexpected(ERR_EMPTY_DATA));
+    }
+    let mut acc = UntaggedValue::int(1).into();
+    for value in data {
+        println!("{:#?}", value);
+        match value.value {
+            UntaggedValue::Primitive(_) => acc = acc * value,
+            _ => {
+                return Err(ShellError::labeled_error(
+                    "Attempted to compute the product of a value that cannot be multiplied.",
+                    "value appears here",
+                    value.tag.span,
+                ));
+            }
+        }
+    }
+    Ok(acc)
+}
+
 pub fn sum(data: Vec<Value>) -> Result<Value, ShellError> {
     if data.is_empty() {
         return Err(ShellError::unexpected(ERR_EMPTY_DATA));
     }
     let mut acc = Value::zero();
     for value in data {
+        println!("{:#?}", value);
         match value.value {
             UntaggedValue::Primitive(_) => acc = acc + value,
             _ => {
@@ -289,12 +311,14 @@ pub fn reducer_for(
 ) -> Box<dyn Fn(Value, Vec<Value>) -> Result<Value, ShellError> + Send + Sync + 'static> {
     match command {
         Reduce::Summation | Reduce::Default => Box::new(formula(Value::zero(), Box::new(sum))),
+        Reduce::Product => Box::new(formula(Value::zero(), Box::new(product))),
         Reduce::Minimum => Box::new(|_, values| min(values)),
         Reduce::Maximum => Box::new(|_, values| max(values)),
     }
 }
 
 pub enum Reduce {
+    Product,
     Summation,
     Minimum,
     Maximum,
@@ -309,6 +333,7 @@ pub fn reduce(
     let tag = tag.into();
 
     let reduce_with = match reducer {
+        Some(cmd) if cmd == "product" => reducer_for(Reduce::Product),
         Some(cmd) if cmd == "sum" => reducer_for(Reduce::Summation),
         Some(cmd) if cmd == "min" => reducer_for(Reduce::Minimum),
         Some(cmd) if cmd == "max" => reducer_for(Reduce::Maximum),

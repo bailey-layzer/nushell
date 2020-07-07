@@ -215,7 +215,7 @@ pub(crate) use ls::Ls;
 #[allow(unused_imports)]
 pub(crate) use map_max_by::MapMaxBy;
 pub(crate) use math::{
-    Math, MathAverage, MathMaximum, MathMedian, MathMinimum, MathMode, MathSummation,
+    Math, MathAverage, MathMaximum, MathMedian, MathMinimum, MathMode, MathProduct, MathSummation,
 };
 pub(crate) use merge::Merge;
 pub(crate) use mkdir::Mkdir;

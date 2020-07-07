@@ -4,6 +4,7 @@ pub mod max;
 pub mod median;
 pub mod min;
 pub mod mode;
+pub mod product;
 pub mod sum;
 pub mod utils;
 
@@ -13,4 +14,5 @@ pub use max::SubCommand as MathMaximum;
 pub use median::SubCommand as MathMedian;
 pub use min::SubCommand as MathMinimum;
 pub use mode::SubCommand as MathMode;
+pub use product::SubCommand as MathProduct;
 pub use sum::SubCommand as MathSummation;

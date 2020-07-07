@@ -363,6 +363,7 @@ pub fn create_default_context(
             whole_stream_command(MathMinimum),
             whole_stream_command(MathMode),
             whole_stream_command(MathMaximum),
+            whole_stream_command(MathProduct),
             whole_stream_command(MathSummation),
             // File format output
             whole_stream_command(To),
@@ -408,6 +409,7 @@ pub fn create_default_context(
 
         cfg_if::cfg_if! {
             if #[cfg(data_processing_primitives)] {
+                println!("data proc primitives");
                 context.add_commands(vec![
                 whole_stream_command(ReduceBy),
                 whole_stream_command(EvaluateBy),
