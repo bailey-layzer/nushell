@@ -1,7 +1,8 @@
 use crate::commands::classified::block::run_block;
-use crate::commands::WholeStreamCommand;
+use crate::commands::{Command, WholeStreamCommand};
 use crate::prelude::*;
 
+use crate::whole_stream_command;
 use derive_new::new;
 use nu_errors::ShellError;
 use nu_protocol::{hir::Block, Signature, SyntaxShape};
@@ -11,6 +12,7 @@ pub struct AliasCommand {
     name: String,
     args: Vec<String>,
     block: Block,
+    shadowed: Option<Command>,
 }
 
 #[async_trait]
@@ -39,9 +41,16 @@ impl WholeStreamCommand for AliasCommand {
         registry: &CommandRegistry,
     ) -> Result<OutputStream, ShellError> {
         let call_info = args.call_info.clone();
-        let registry = registry.clone();
+        let mut registry = registry.clone();
         let mut block = self.block.clone();
         block.set_is_last(call_info.args.is_last);
+
+        let reshadow = if let Some(cmd) = &self.shadowed {
+            registry.insert(cmd.name(), cmd.clone());
+            true
+        } else {
+            false
+        };
 
         let alias_command = self.clone();
         let mut context = Context::from_args(&args, &registry);
@@ -58,7 +67,7 @@ impl WholeStreamCommand for AliasCommand {
         }
 
         // FIXME: we need to patch up the spans to point at the top-level error
-        Ok(run_block(
+        let result = Ok(run_block(
             &block,
             &mut context,
             input,
@@ -67,6 +76,12 @@ impl WholeStreamCommand for AliasCommand {
             &scope.env,
         )
         .await?
-        .to_output_stream())
+        .to_output_stream());
+
+        if reshadow {
+            registry.insert(&self.name, whole_stream_command(self.clone()))
+        };
+
+        result
     }
 }

@@ -195,8 +195,13 @@ pub(crate) async fn run_internal_command(
                                 InputStream::from_stream(futures::stream::iter(vec![]))
                             }
                             CommandAction::AddAlias(name, args, block) => {
+                                let shadowed = if context.registry.has(&name) {
+                                    context.registry.get_command(&name)
+                                } else {
+                                    None
+                                };
                                 context.add_commands(vec![whole_stream_command(
-                                    AliasCommand::new(name, args, block),
+                                    AliasCommand::new(name, args, block, shadowed),
                                 )]);
                                 InputStream::from_stream(futures::stream::iter(vec![]))
                             }
