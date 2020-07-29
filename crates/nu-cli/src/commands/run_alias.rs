@@ -11,6 +11,7 @@ pub struct AliasCommand {
     name: String,
     args: Vec<String>,
     block: Block,
+    captured: CommandRegistry,
 }
 
 #[async_trait]
@@ -39,9 +40,18 @@ impl WholeStreamCommand for AliasCommand {
         registry: &CommandRegistry,
     ) -> Result<OutputStream, ShellError> {
         let call_info = args.call_info.clone();
-        let registry = registry.clone();
+        let mut registry = registry.clone();
         let mut block = self.block.clone();
         block.set_is_last(call_info.args.is_last);
+
+        for name in &self.captured.names() {
+            registry.insert(
+                name,
+                self.captured
+                    .get_command(name)
+                    .expect("getting command given by names()"),
+            );
+        }
 
         let alias_command = self.clone();
         let mut context = Context::from_args(&args, &registry);

@@ -3,6 +3,7 @@ use crate::context::CommandRegistry;
 use crate::data::config;
 use crate::prelude::*;
 use nu_errors::ShellError;
+use nu_protocol::hir::{ClassifiedCommand, Commands};
 use nu_protocol::{
     hir::Block, CommandAction, ReturnSuccess, Signature, SyntaxShape, UntaggedValue, Value,
 };
@@ -133,8 +134,17 @@ pub async fn alias(
         }
     }
 
+    let mut captured = Vec::new();
+    for Commands { list, span: _ } in &block.block {
+        for classified in list {
+            if let ClassifiedCommand::Internal(internal) = classified {
+                captured.push(internal.name.clone());
+            }
+        }
+    }
+
     Ok(OutputStream::one(ReturnSuccess::action(
-        CommandAction::AddAlias(name.to_string(), processed_args, block),
+        CommandAction::AddAlias(name.to_string(), processed_args, block, captured),
     )))
 }
 

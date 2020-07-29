@@ -22,7 +22,7 @@ pub enum CommandAction {
     /// Enter the help shell, which allows exploring the help system
     EnterHelpShell(Value),
     /// Enter the help shell, which allows exploring the help system
-    AddAlias(String, Vec<String>, Block),
+    AddAlias(String, Vec<String>, Block, Vec<String>),
     /// Go to the previous shell in the shell ring buffer
     PreviousShell,
     /// Go to the next shell in the shell ring buffer

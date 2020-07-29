@@ -194,9 +194,16 @@ pub(crate) async fn run_internal_command(
                                 ));
                                 InputStream::from_stream(futures::stream::iter(vec![]))
                             }
-                            CommandAction::AddAlias(name, args, block) => {
+                            CommandAction::AddAlias(name, args, block, captured) => {
+                                let mut captured_registry = CommandRegistry::new();
+                                for name in captured {
+                                    if let Some(bound) = context.registry.get_command(&name) {
+                                        captured_registry.insert(name, bound)
+                                    }
+                                }
+
                                 context.add_commands(vec![whole_stream_command(
-                                    AliasCommand::new(name, args, block),
+                                    AliasCommand::new(name, args, block, captured_registry),
                                 )]);
                                 InputStream::from_stream(futures::stream::iter(vec![]))
                             }
