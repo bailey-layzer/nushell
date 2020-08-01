@@ -2,6 +2,7 @@ use crate::cli::History as HistoryFile;
 use crate::commands::WholeStreamCommand;
 use crate::prelude::*;
 use nu_errors::ShellError;
+use nu_protocol::hir::{ClassifiedCommand, Commands};
 use nu_protocol::{ReturnSuccess, Signature, UntaggedValue};
 use nu_source::Tagged;
 use std::fs::File;
@@ -37,7 +38,7 @@ impl WholeStreamCommand for History {
         args: CommandArgs,
         registry: &CommandRegistry,
     ) -> Result<OutputStream, ShellError> {
-        history(args, registry)
+        history(args, registry).await
     }
 
     fn examples(&self) -> Vec<Example> {
@@ -49,23 +50,69 @@ impl WholeStreamCommand for History {
     }
 }
 
-fn history(args: CommandArgs, _registry: &CommandRegistry) -> Result<OutputStream, ShellError> {
-    let tag = args.call_info.name_tag;
+async fn history(
+    args: CommandArgs,
+    registry: &CommandRegistry,
+) -> Result<OutputStream, ShellError> {
+    let tag = args.call_info.name_tag.clone();
     let (HistoryArgs { structured }, _) = args.process(&registry).await?;
     let history_path = HistoryFile::path();
     let file = File::open(history_path);
     if let Ok(file) = file {
         let reader = BufReader::new(file);
-        let output = reader.lines().filter_map(move |line| match line {
-            Ok(line) => Some(ReturnSuccess::value(
-                UntaggedValue::string(line).into_value(tag.clone()),
-            )),
-            Err(_) => None,
-        });
 
         if structured.item {
-            Err(ShellError::unimplemented("structured history"))
+            let registry = registry.clone();
+            let lines = reader.lines().filter_map(move |line| match line {
+                Ok(line) => {
+                    let lite = match nu_parser::lite_parse(&line, 0) {
+                        Ok(val) => val,
+                        Err(_) => {
+                            return Some(Err(ShellError::unexpected("TODO or is it?")));
+                            // return Some(Ok(format!("ERR: {}", line)));
+                        }
+                    };
+
+                    let mut classified_block = nu_parser::classify_block(&lite, &registry);
+                    if let Some(failure) = classified_block.failed {
+                        return None; // TODO?
+                    }
+
+                    let block = classified_block.block.clone(); // TODO don't clone
+                    if let Some(last) = classified_block.block.block.pop() {
+                        let rows = last.list.iter().filter_map(|row| match row {
+                            ClassifiedCommand::Expr(expr) => None,
+                            ClassifiedCommand::Internal(internal) => Some("foo"),
+
+                            // FIXME implement when these are implemented elsewhere
+                            ClassifiedCommand::Dynamic(_) => None,
+                            ClassifiedCommand::Error(_) => None,
+                        });
+                    }
+
+                    Some(Ok(block))
+
+                    // Some(Err(ShellError::unimplemented("foo")))
+                }
+                Err(_) => None,
+            });
+
+            // Err(ShellError::unimplemented("structured history"))
+            Ok(futures::stream::iter(lines)
+                .map(move |block| match block {
+                    Err(err) => Err(err),
+                    Ok(bl) => {
+                        ReturnSuccess::value(UntaggedValue::Block(bl).into_value(tag.clone()))
+                    }
+                })
+                .to_output_stream())
         } else {
+            let output = reader.lines().filter_map(move |line| match line {
+                Ok(line) => Some(ReturnSuccess::value(
+                    UntaggedValue::string(line).into_value(tag.clone()),
+                )),
+                Err(_) => None,
+            });
             Ok(futures::stream::iter(output).to_output_stream())
         }
     } else {
