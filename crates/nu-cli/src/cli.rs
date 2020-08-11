@@ -1050,12 +1050,12 @@ pub async fn process_line(
                 Ok(val) => val,
             };
 
-            debug!("=== Parsed ===");
-            debug!("{:#?}", result);
+            println!("=== Parsed ===");
+            println!("{:#?}", result);
 
             let mut classified_block = nu_parser::classify_block(&result, ctx.registry());
 
-            debug!("{:#?}", classified_block);
+            println!("{:#?}", classified_block);
             //println!("{:#?}", pipeline);
 
             if let Some(failure) = classified_block.failed {

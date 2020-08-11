@@ -181,6 +181,21 @@ pub fn parse_full_column_path(
             } else if current_part.starts_with('$') {
                 // We have the variable head
                 head = Some(Expression::variable(current_part, lite_arg.span));
+            } else if head.is_none() && current_part.starts_with('!') {
+                // history expansion/substitution
+                let lite_block = match lite_parse("history -l | last 1", lite_arg.span.start()) {
+                    Ok(lp) => lp,
+                    Err(e) => return (garbage(lite_arg.span), Some(e.cause)), // TODO
+                };
+
+                let classified_block = classify_block(&lite_block, registry);
+                println!("{:#?}", classified_block);
+                let err = classified_block.failed;
+
+                if error.is_none() {
+                    error = err;
+                }
+                head = Some(Expression::Invocation(classified_block.block))
             } else if let Ok(row_number) = current_part.parse::<u64>() {
                 output.push(
                     UnspannedPathMember::Int(BigInt::from(row_number)).into_path_member(part_span),
@@ -522,7 +537,7 @@ fn parse_external_arg(
     registry: &dyn SignatureRegistry,
     lite_arg: &Spanned<String>,
 ) -> (SpannedExpression, Option<ParseError>) {
-    if lite_arg.item.starts_with('$') {
+    if lite_arg.item.starts_with('$') || lite_arg.item.starts_with('!') {
         return parse_full_column_path(&lite_arg, registry);
     }
 
@@ -543,7 +558,7 @@ fn parse_arg(
     registry: &dyn SignatureRegistry,
     lite_arg: &Spanned<String>,
 ) -> (SpannedExpression, Option<ParseError>) {
-    if lite_arg.item.starts_with('$') {
+    if lite_arg.item.starts_with('$') || lite_arg.item.starts_with('!') {
         return parse_full_column_path(&lite_arg, registry);
     }
 
