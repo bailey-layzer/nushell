@@ -12,55 +12,145 @@ use std::error::Error;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
+// struct CommandScope {
+//
+// }
+
 #[derive(Debug, Clone, Default)]
 pub struct CommandRegistry {
-    registry: Arc<Mutex<IndexMap<String, Command>>>,
+    core: CommandRegistryCore,
+    scope: IndexMap<String, usize>,
+}
+
+impl CommandRegistry {
+    pub fn new() -> CommandRegistry {
+        CommandRegistry {
+            core: CommandRegistryCore::new(),
+            scope: IndexMap::default(),
+        }
+    }
+
+    fn get_in_scope(&self, name: &str) -> Option<Command> {
+        let registry = self.core.registry.lock();
+
+        registry.get(name).map(|vec| {
+            match self.scope.get(name) {
+                None => vec.last(),
+                Some(i) => vec.get(*i),
+            }
+            .expect("command scope indexing failure")
+            .to_owned()
+        })
+    }
 }
 
 impl SignatureRegistry for CommandRegistry {
     fn has(&self, name: &str) -> bool {
-        let registry = self.registry.lock();
-        registry.contains_key(name)
+        self.core.has(name)
     }
+
     fn get(&self, name: &str) -> Option<Signature> {
-        let registry = self.registry.lock();
-        registry.get(name).map(|command| command.signature())
+        self.get_in_scope(name).map(|cmd| cmd.signature())
     }
+
     fn clone_box(&self) -> Box<dyn SignatureRegistry> {
         Box::new(self.clone())
     }
 }
 
 impl CommandRegistry {
-    pub fn new() -> CommandRegistry {
-        CommandRegistry {
+    // pub fn get_command_vec(&self, name: &str) -> Option<&Vec<Command>> {
+    //     let registry = self.core.registry.lock();
+    //
+    //     registry.get(name)
+    // }
+
+    pub fn get_command(&self, name: &str) -> Option<Command> {
+        self.get_in_scope(name)
+    }
+
+    pub fn expect_command(&self, name: &str) -> Result<Command, ShellError> {
+        self.get_in_scope(name)
+            .ok_or(ShellError::untagged_runtime_error(format!(
+                "Could not load command: {}",
+                name
+            )))
+    }
+
+    pub fn has(&self, name: &str) -> bool {
+        self.core.has(name)
+    }
+
+    pub fn insert(&mut self, name: impl Into<String>, command: Command) {
+        self.core.insert(name, command)
+    }
+
+    pub fn names(&self) -> Vec<String> {
+        self.core.names()
+    }
+
+    pub fn set_scope(&mut self, name: &str, scope: usize) {
+        self.scope.insert(name.to_string(), scope);
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+struct CommandRegistryCore {
+    // TODO elim entirely?
+    // TODO does this mess up allocation or something?
+    registry: Arc<Mutex<IndexMap<String, Vec<Command>>>>,
+}
+
+impl CommandRegistryCore {
+    // TODO SignatureRegistry for
+    fn has(&self, name: &str) -> bool {
+        let registry = self.registry.lock();
+        registry.contains_key(name)
+    }
+
+    // fn get(&self, name: &str) -> Option<Vec<Signature>> {
+    //     let registry = self.registry.lock();
+    //     registry
+    //         .get(name)
+    //         .map(|vec| vec.iter().map(|cmd| cmd.signature()).collect())
+    // }
+
+    // // TODO can eliminate?
+    // fn clone_box(&self) -> Box<dyn SignatureRegistry> {
+    //     Box::new(self.clone())
+    // }
+}
+
+impl CommandRegistryCore {
+    pub fn new() -> CommandRegistryCore {
+        CommandRegistryCore {
             registry: Arc::new(Mutex::new(IndexMap::default())),
         }
     }
 }
 
-impl CommandRegistry {
-    pub fn get_command(&self, name: &str) -> Option<Command> {
-        let registry = self.registry.lock();
+impl CommandRegistryCore {
+    // pub fn expect_command(&self, name: &str) -> Result<&Vec<Command>, ShellError> {
+    //     self.get_command(name).ok_or_else(|| {
+    //         ShellError::untagged_runtime_error(format!("Could not load command: {}", name))
+    //     })
+    // }
 
-        registry.get(name).cloned()
-    }
-
-    pub fn expect_command(&self, name: &str) -> Result<Command, ShellError> {
-        self.get_command(name).ok_or_else(|| {
-            ShellError::untagged_runtime_error(format!("Could not load command: {}", name))
-        })
-    }
-
-    pub fn has(&self, name: &str) -> bool {
-        let registry = self.registry.lock();
-
-        registry.contains_key(name)
-    }
+    // pub fn has(&self, name: &str) -> bool {
+    //     let registry = self.registry.lock();
+    //
+    //     registry.contains_key(name)
+    // }
 
     pub fn insert(&mut self, name: impl Into<String>, command: Command) {
         let mut registry = self.registry.lock();
-        registry.insert(name.into(), command);
+        let name = name.into();
+        match registry.get_mut(&name) {
+            None => {
+                registry.insert(name, vec![command]);
+            }
+            Some(vec) => vec.push(command),
+        };
     }
 
     pub fn names(&self) -> Vec<String> {

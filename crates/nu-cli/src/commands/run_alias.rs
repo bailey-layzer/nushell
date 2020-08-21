@@ -39,7 +39,9 @@ impl WholeStreamCommand for AliasCommand {
         registry: &CommandRegistry,
     ) -> Result<OutputStream, ShellError> {
         let call_info = args.call_info.clone();
-        let registry = registry.clone();
+        let mut registry = registry.clone();
+        registry.set_scope(&self.name, 0); // TODO
+
         let mut block = self.block.clone();
         block.set_redirect(call_info.args.external_redirection);
 
