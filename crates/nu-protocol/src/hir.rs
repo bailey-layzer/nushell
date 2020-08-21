@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{hir, Primitive, UntaggedValue};
+use crate::{hir, Primitive, SyntaxShape, UntaggedValue};
 use crate::{PathMember, ShellTypeName};
 use derive_new::new;
 
@@ -209,6 +209,14 @@ impl Block {
             }
         }
     }
+}
+
+// TODO other derives?
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AliasBlock {
+    pub block: Block,
+    pub arg_shapes: Vec<(String, SyntaxShape)>,
+    pub cmd_scopes: Vec<(String, usize)>,
 }
 
 #[derive(Debug, Ord, PartialOrd, Eq, PartialEq, Clone, Hash, Deserialize, Serialize)]

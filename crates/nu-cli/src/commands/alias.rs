@@ -4,10 +4,12 @@ use crate::prelude::*;
 use nu_data::config;
 use nu_errors::ShellError;
 use nu_parser::SignatureRegistry;
-use nu_protocol::hir::{ClassifiedCommand, Expression, NamedValue, SpannedExpression, Variable};
+use nu_protocol::hir::{
+    AliasBlock, Block, ClassifiedCommand, Expression, NamedValue, SpannedExpression, Variable,
+};
 use nu_protocol::{
-    hir::Block, CommandAction, NamedType, PositionalType, ReturnSuccess, Signature, SyntaxShape,
-    UntaggedValue, Value,
+    CommandAction, NamedType, PositionalType, ReturnSuccess, Signature, SyntaxShape, UntaggedValue,
+    Value,
 };
 use nu_source::Tagged;
 use std::collections::HashMap;
@@ -103,7 +105,7 @@ pub async fn alias(
         let alias: Value = raw_input.trim().to_string().into();
         let alias_start = raw_input.find('[').unwrap_or(0); // used to check if the same alias already exists
 
-        // add to startup if alias doesn't exist and replce if it does
+        // add to startup if alias doesn't exist and replace if it does
         match result.get_mut("startup") {
             Some(startup) => {
                 if let UntaggedValue::Table(ref mut commands) = startup.value {
@@ -140,99 +142,100 @@ pub async fn alias(
     Ok(OutputStream::one(ReturnSuccess::action(
         CommandAction::AddAlias(
             name.to_string(),
-            to_arg_shapes(processed_args, &block, &registry)?,
-            block,
+            process_block(processed_args, block, &registry)?,
         ),
     )))
 }
 
-fn to_arg_shapes(
+fn process_block(
     args: Vec<String>,
-    block: &Block,
+    block: Block,
     registry: &CommandRegistry,
-) -> Result<Vec<(String, SyntaxShape)>, ShellError> {
-    match find_block_shapes(block, registry) {
-        Ok(found) => Ok(args
-            .iter()
-            .map(|arg| {
-                (
-                    arg.clone(),
-                    match found.get(arg) {
-                        None | Some((_, None)) => SyntaxShape::Any,
-                        Some((_, Some(shape))) => *shape,
-                    },
-                )
-            })
-            .collect()),
-        Err(err) => Err(err),
-    }
+) -> Result<AliasBlock, ShellError> {
+    let (found_args, found_cmds) = inspect_block(&block, registry)?;
+    let arg_shapes = args
+        .iter()
+        .map(|arg| {
+            (
+                arg.clone(),
+                match found_args.get(arg) {
+                    None | Some((_, None)) => SyntaxShape::Any,
+                    Some((_, Some(shape))) => *shape,
+                },
+            )
+        })
+        .collect();
+
+    Ok(AliasBlock {
+        block,
+        arg_shapes,
+        cmd_scopes: found_cmds.into_iter().collect(),
+    })
 }
 
 type ShapeMap = HashMap<String, (Span, Option<SyntaxShape>)>;
+type ScopeMap = HashMap<String, usize>;
+type BlockInfo = (ShapeMap, ScopeMap); // TODO name? restructure?
 
-fn check_insert(
-    existing: &mut ShapeMap,
-    to_add: (String, (Span, Option<SyntaxShape>)),
-) -> Result<(), ShellError> {
-    match (to_add.1).1 {
-        None => match existing.get(&to_add.0) {
-            None => {
-                existing.insert(to_add.0, to_add.1);
-                Ok(())
-            }
-            Some(_) => Ok(()),
-        },
-        Some(new) => match existing.insert(to_add.0.clone(), ((to_add.1).0, Some(new))) {
-            None => Ok(()),
-            Some(exist) => match exist.1 {
+fn check_merge(existing: &mut BlockInfo, new: BlockInfo) -> Result<(), ShellError> {
+    let (new_shapes, new_scopes) = new;
+    existing.1.extend(new_scopes);
+    for (name, v) in new_shapes.into_iter() {
+        match v.1 {
+            None => match existing.0.get(&name) {
+                None => {
+                    existing.0.insert(name, v);
+                    Ok(())
+                }
+                Some(_) => Ok(()),
+            },
+            Some(new) => match existing.0.insert(name, v) {
                 None => Ok(()),
-                Some(shape) => match shape {
-                    SyntaxShape::Any => Ok(()),
-                    shape if shape == new => Ok(()),
-                    _ => Err(ShellError::labeled_error(
-                        "Type conflict in alias variable use",
-                        "creates type conflict",
-                        (to_add.1).0,
-                    )),
+                Some((_, shp)) => match shp {
+                    None => Ok(()),
+                    Some(shape) => match shape {
+                        SyntaxShape::Any => Ok(()),
+                        shape if shape == new => Ok(()),
+                        _ => Err(ShellError::labeled_error(
+                            "Type conflict in alias variable use",
+                            "creates type conflict",
+                            v.0,
+                        )),
+                    },
                 },
             },
-        },
-    }
-}
-
-fn check_merge(existing: &mut ShapeMap, new: &ShapeMap) -> Result<(), ShellError> {
-    for (k, v) in new.iter() {
-        check_insert(existing, (k.clone(), *v))?;
+        }?
     }
 
     Ok(())
 }
 
-fn find_expr_shapes(
+fn inspect_expr(
     spanned_expr: &SpannedExpression,
     registry: &CommandRegistry,
-) -> Result<ShapeMap, ShellError> {
+) -> Result<(ShapeMap, ScopeMap), ShellError> {
     match &spanned_expr.expr {
         // TODO range will need similar if/when invocations can be parsed within range expression
-        Expression::Binary(bin) => find_expr_shapes(&bin.left, registry).and_then(|mut left| {
-            find_expr_shapes(&bin.right, registry)
-                .and_then(|right| check_merge(&mut left, &right).map(|()| left))
+        Expression::Binary(bin) => inspect_expr(&bin.left, registry).and_then(|mut left| {
+            inspect_expr(&bin.right, registry)
+                .and_then(|right| check_merge(&mut left, right))
+                .map(|()| left)
         }),
-        Expression::Block(b) => find_block_shapes(&b, registry),
+        Expression::Block(b) => inspect_block(&b, registry),
         Expression::Path(path) => match &path.head.expr {
-            Expression::Invocation(b) => find_block_shapes(&b, registry),
+            Expression::Invocation(b) => inspect_block(&b, registry),
             Expression::Variable(Variable::Other(var, _)) => {
                 let mut result = HashMap::new();
                 result.insert(var.to_string(), (spanned_expr.span, None));
-                Ok(result)
+                Ok((result, ScopeMap::new()))
             }
-            _ => Ok(HashMap::new()),
+            _ => Ok((ShapeMap::new(), ScopeMap::new())),
         },
-        _ => Ok(HashMap::new()),
+        _ => Ok((ShapeMap::new(), ScopeMap::new())),
     }
 }
 
-fn find_block_shapes(block: &Block, registry: &CommandRegistry) -> Result<ShapeMap, ShellError> {
+fn inspect_block(block: &Block, registry: &CommandRegistry) -> Result<BlockInfo, ShellError> {
     let apply_shape = |found: ShapeMap, sig_shape: SyntaxShape| -> ShapeMap {
         found
             .iter()
@@ -243,25 +246,34 @@ fn find_block_shapes(block: &Block, registry: &CommandRegistry) -> Result<ShapeM
             .collect()
     };
 
-    let mut arg_shapes = HashMap::new();
+    let mut block_info = (ShapeMap::new(), ScopeMap::new());
+
     for pipeline in &block.block {
         for classified in &pipeline.list {
             match classified {
                 ClassifiedCommand::Expr(spanned_expr) => {
-                    let found = find_expr_shapes(&spanned_expr, registry)?;
-                    check_merge(&mut arg_shapes, &found)?
+                    let found = inspect_expr(&spanned_expr, registry)?;
+                    check_merge(&mut block_info, found)?
                 }
                 ClassifiedCommand::Internal(internal) => {
-                    if let Some(signature) = registry.get(&internal.name) {
+                    let name = &internal.name;
+                    if let Some(signature) = registry.get(name) {
+                        if !block_info.1.contains_key(name) {
+                            block_info.1.insert(
+                                name.to_string(),
+                                registry
+                                    .get_scope(name)
+                                    .expect("name should be in regsitry"),
+                            );
+                        }
+
                         if let Some(positional) = &internal.args.positional {
                             for (i, spanned_expr) in positional.iter().enumerate() {
-                                let found = find_expr_shapes(&spanned_expr, registry)?;
+                                let mut found = inspect_expr(&spanned_expr, registry)?;
                                 if i >= signature.positional.len() {
                                     if let Some((sig_shape, _)) = &signature.rest_positional {
-                                        check_merge(
-                                            &mut arg_shapes,
-                                            &apply_shape(found, *sig_shape),
-                                        )?;
+                                        found.0 = apply_shape(found.0, *sig_shape);
+                                        check_merge(&mut block_info, found)?;
                                     } else {
                                         unreachable!("should have error'd in parsing");
                                     }
@@ -271,10 +283,8 @@ fn find_block_shapes(block: &Block, registry: &CommandRegistry) -> Result<ShapeM
                                         // TODO pass on mandatory/optional?
                                         PositionalType::Mandatory(_, sig_shape)
                                         | PositionalType::Optional(_, sig_shape) => {
-                                            check_merge(
-                                                &mut arg_shapes,
-                                                &apply_shape(found, *sig_shape),
-                                            )?;
+                                            found.0 = apply_shape(found.0, *sig_shape);
+                                            check_merge(&mut block_info, found)?;
                                         }
                                     }
                                 }
@@ -284,7 +294,7 @@ fn find_block_shapes(block: &Block, registry: &CommandRegistry) -> Result<ShapeM
                         if let Some(named) = &internal.args.named {
                             for (name, val) in named.iter() {
                                 if let NamedValue::Value(_, spanned_expr) = val {
-                                    let found = find_expr_shapes(&spanned_expr, registry)?;
+                                    let mut found = inspect_expr(&spanned_expr, registry)?;
                                     match signature.named.get(name) {
                                         None => {
                                             unreachable!("should have error'd in parsing");
@@ -293,10 +303,8 @@ fn find_block_shapes(block: &Block, registry: &CommandRegistry) -> Result<ShapeM
                                             if let NamedType::Mandatory(_, sig_shape)
                                             | NamedType::Optional(_, sig_shape) = named_type
                                             {
-                                                check_merge(
-                                                    &mut arg_shapes,
-                                                    &apply_shape(found, *sig_shape),
-                                                )?;
+                                                found.0 = apply_shape(found.0, *sig_shape);
+                                                check_merge(&mut block_info, found)?;
                                             }
                                         }
                                     }
@@ -312,7 +320,7 @@ fn find_block_shapes(block: &Block, registry: &CommandRegistry) -> Result<ShapeM
         }
     }
 
-    Ok(arg_shapes)
+    Ok(block_info)
 }
 
 #[cfg(test)]

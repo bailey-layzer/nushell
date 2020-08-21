@@ -59,12 +59,6 @@ impl SignatureRegistry for CommandRegistry {
 }
 
 impl CommandRegistry {
-    // pub fn get_command_vec(&self, name: &str) -> Option<&Vec<Command>> {
-    //     let registry = self.core.registry.lock();
-    //
-    //     registry.get(name)
-    // }
-
     pub fn get_command(&self, name: &str) -> Option<Command> {
         self.get_in_scope(name)
     }
@@ -87,6 +81,16 @@ impl CommandRegistry {
 
     pub fn names(&self) -> Vec<String> {
         self.core.names()
+    }
+
+    pub fn get_scope(&self, name: &str) -> Option<usize> {
+        match self.scope.get(name) {
+            Some(sc) => Some(*sc),
+            None => {
+                let registry = self.core.registry.lock();
+                registry.get(name).map(|vec| vec.len() - 1)
+            }
+        }
     }
 
     pub fn set_scope(&mut self, name: &str, scope: usize) {

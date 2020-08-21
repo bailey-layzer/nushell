@@ -4,13 +4,13 @@ use crate::prelude::*;
 
 use derive_new::new;
 use nu_errors::ShellError;
-use nu_protocol::{hir::Block, Signature, SyntaxShape};
+use nu_protocol::hir::AliasBlock;
+use nu_protocol::Signature;
 
 #[derive(new, Clone)]
 pub struct AliasCommand {
     name: String,
-    args: Vec<(String, SyntaxShape)>,
-    block: Block,
+    block: AliasBlock,
 }
 
 #[async_trait]
@@ -22,7 +22,7 @@ impl WholeStreamCommand for AliasCommand {
     fn signature(&self) -> Signature {
         let mut alias = Signature::build(&self.name);
 
-        for (arg, shape) in &self.args {
+        for (arg, shape) in &self.block.arg_shapes {
             alias = alias.optional(arg, *shape, "");
         }
 
@@ -40,9 +40,11 @@ impl WholeStreamCommand for AliasCommand {
     ) -> Result<OutputStream, ShellError> {
         let call_info = args.call_info.clone();
         let mut registry = registry.clone();
-        registry.set_scope(&self.name, 0); // TODO
+        for (cmd, scope) in &self.block.cmd_scopes {
+            registry.set_scope(cmd, *scope)
+        }
 
-        let mut block = self.block.clone();
+        let mut block = self.block.block.clone();
         block.set_redirect(call_info.args.external_redirection);
 
         let alias_command = self.clone();
@@ -53,9 +55,10 @@ impl WholeStreamCommand for AliasCommand {
         let evaluated = call_info.evaluate(&registry).await?;
         if let Some(positional) = &evaluated.args.positional {
             for (pos, arg) in positional.iter().enumerate() {
-                scope
-                    .vars
-                    .insert(alias_command.args[pos].0.to_string(), arg.clone());
+                scope.vars.insert(
+                    alias_command.block.arg_shapes[pos].0.to_string(),
+                    arg.clone(),
+                );
             }
         }
 
