@@ -63,7 +63,7 @@ impl WholeStreamCommand for Alias {
             },
             Example {
                 description: "An alias with a single parameter",
-                example: "alias l [x] { ls $x }",
+                example: "alias o [file] { open $file }",
                 result: None,
             },
         ]
@@ -94,11 +94,11 @@ pub async fn alias(
         let left_brace = raw_input.find('{').unwrap_or(0);
         let right_brace = raw_input.rfind('}').unwrap_or_else(|| raw_input.len());
         let left = raw_input[..left_brace]
-            .replace("--save", "")
-            .replace("-s", "");
+            .replace("--save ", "") // FIXME? may cause issues with multiple flags
+            .replace("-s ", "");
         let right = raw_input[right_brace..]
-            .replace("--save", "")
-            .replace("-s", "");
+            .replace("--save ", "")
+            .replace("-s ", "");
         raw_input = format!("{}{}{}", left, &raw_input[left_brace..right_brace], right);
 
         // create a value from raw_input alias

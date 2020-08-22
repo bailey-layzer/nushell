@@ -20,7 +20,7 @@ fn alias_args_work() {
 #[cfg(not(windows))]
 fn alias_parses_path_tilde() {
     let actual = nu!(
-        cwd: "tests/fixtures/formats",
+        cwd: ".",
         r#"
         alias new-cd [dir] { cd $dir }
         new-cd ~
@@ -96,4 +96,44 @@ fn error_alias_syntax_shape_clash() {
     );
 
     assert!(actual.err.contains("alias"));
+}
+
+#[test]
+fn alias_shadows() {
+    let actual = nu!(
+        cwd: "tests/fixtures/formats",
+        r#"
+        alias open [file] { open -r $file }
+        open sample.url | get bread
+        "#
+    );
+
+    assert!(actual.err.contains("Expected row or table"));
+}
+
+#[test]
+fn alias_shadows_secondary() {
+    let actual = nu!(
+        cwd: ".",
+        r#"
+        alias 'to json' [] { echo "json machine broke" }
+        echo 1 2 3 | to json
+        "#
+    );
+
+    assert!(actual.out.contains("json machine broke"));
+}
+
+#[test]
+fn alias_captures() {
+    let actual = nu!(
+        cwd: "tests/fixtures/formats",
+        r#"
+        alias nu-open [file] { open $file }
+        alias open [file] { open -r $file }
+        nu-open sample.url | get bread
+        "#
+    );
+
+    assert!(actual.out.contains("baguette"));
 }
