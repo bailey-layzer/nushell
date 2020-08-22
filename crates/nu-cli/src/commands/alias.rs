@@ -5,7 +5,7 @@ use nu_data::config;
 use nu_errors::ShellError;
 use nu_parser::SignatureRegistry;
 use nu_protocol::hir::{
-    AliasBlock, Block, ClassifiedCommand, Expression, NamedValue, SpannedExpression, Variable,
+    Block, ClassifiedCommand, Expression, NamedValue, SpannedExpression, Variable,
 };
 use nu_protocol::{
     CommandAction, NamedType, PositionalType, ReturnSuccess, Signature, SyntaxShape, UntaggedValue,
@@ -139,20 +139,19 @@ pub async fn alias(
         }
     }
 
+    let (arg_shapes, commands) = process_block(processed_args, &block, &registry)?;
+
     Ok(OutputStream::one(ReturnSuccess::action(
-        CommandAction::AddAlias(
-            name.to_string(),
-            process_block(processed_args, block, &registry)?,
-        ),
+        CommandAction::AddAlias(name.to_string(), block, arg_shapes, commands),
     )))
 }
 
 fn process_block(
     args: Vec<String>,
-    block: Block,
+    block: &Block,
     registry: &CommandRegistry,
-) -> Result<AliasBlock, ShellError> {
-    let (found_args, found_cmds) = inspect_block(&block, registry)?;
+) -> Result<(Vec<(String, SyntaxShape)>, Vec<String>), ShellError> {
+    let (found_args, found_cmds) = inspect_block(block, registry)?;
     let arg_shapes = args
         .iter()
         .map(|arg| {
@@ -166,20 +165,27 @@ fn process_block(
         })
         .collect();
 
-    Ok(AliasBlock {
-        block,
-        arg_shapes,
-        cmd_scopes: found_cmds.into_iter().collect(),
-    })
+    Ok((arg_shapes, found_cmds))
 }
 
+//     Ok(AliasBlock {
+//         block,
+//         arg_shapes,
+//         cmd_scopes: found_cmds.into_iter().collect(),
+//     })
+// }
+
 type ShapeMap = HashMap<String, (Span, Option<SyntaxShape>)>;
-type ScopeMap = HashMap<String, usize>;
-type BlockInfo = (ShapeMap, ScopeMap); // TODO name? restructure?
+type BlockInfo = (ShapeMap, Vec<String>);
 
 fn check_merge(existing: &mut BlockInfo, new: BlockInfo) -> Result<(), ShellError> {
-    let (new_shapes, new_scopes) = new;
-    existing.1.extend(new_scopes);
+    let (new_shapes, new_cmds) = new;
+    for cmd in new_cmds {
+        if !existing.1.contains(&cmd) {
+            existing.1.push(cmd);
+        }
+    }
+
     for (name, v) in new_shapes.into_iter() {
         match v.1 {
             None => match existing.0.get(&name) {
@@ -213,7 +219,7 @@ fn check_merge(existing: &mut BlockInfo, new: BlockInfo) -> Result<(), ShellErro
 fn inspect_expr(
     spanned_expr: &SpannedExpression,
     registry: &CommandRegistry,
-) -> Result<(ShapeMap, ScopeMap), ShellError> {
+) -> Result<BlockInfo, ShellError> {
     match &spanned_expr.expr {
         // TODO range will need similar if/when invocations can be parsed within range expression
         Expression::Binary(bin) => inspect_expr(&bin.left, registry).and_then(|mut left| {
@@ -227,11 +233,11 @@ fn inspect_expr(
             Expression::Variable(Variable::Other(var, _)) => {
                 let mut result = HashMap::new();
                 result.insert(var.to_string(), (spanned_expr.span, None));
-                Ok((result, ScopeMap::new()))
+                Ok((result, Vec::new()))
             }
-            _ => Ok((ShapeMap::new(), ScopeMap::new())),
+            _ => Ok((ShapeMap::new(), Vec::new())),
         },
-        _ => Ok((ShapeMap::new(), ScopeMap::new())),
+        _ => Ok((ShapeMap::new(), Vec::new())),
     }
 }
 
@@ -246,7 +252,7 @@ fn inspect_block(block: &Block, registry: &CommandRegistry) -> Result<BlockInfo,
             .collect()
     };
 
-    let mut block_info = (ShapeMap::new(), ScopeMap::new());
+    let mut block_info = (ShapeMap::new(), Vec::new());
 
     for pipeline in &block.block {
         for classified in &pipeline.list {
@@ -258,13 +264,8 @@ fn inspect_block(block: &Block, registry: &CommandRegistry) -> Result<BlockInfo,
                 ClassifiedCommand::Internal(internal) => {
                     let name = &internal.name;
                     if let Some(signature) = registry.get(name) {
-                        if !block_info.1.contains_key(name) {
-                            block_info.1.insert(
-                                name.to_string(),
-                                registry
-                                    .get_scope(name)
-                                    .expect("name should be in regsitry"),
-                            );
+                        if !block_info.1.contains(name) {
+                            block_info.1.push(name.to_string());
                         }
 
                         if let Some(positional) = &internal.args.positional {

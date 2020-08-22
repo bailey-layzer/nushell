@@ -1,5 +1,5 @@
 use crate::commands::command::whole_stream_command;
-use crate::commands::run_alias::AliasCommand;
+use crate::commands::run_alias::{AliasBlock, AliasCommand};
 use crate::commands::UnevaluatedCallInfo;
 use crate::prelude::*;
 use log::{log_enabled, trace};
@@ -194,7 +194,24 @@ pub(crate) async fn run_internal_command(
                                 ));
                                 InputStream::from_stream(futures::stream::iter(vec![]))
                             }
-                            CommandAction::AddAlias(name, block) => {
+                            // CommandAction::AddAlias(name, block) => {
+                            CommandAction::AddAlias(name, block, arg_shapes, cmds_used) => {
+                                let cmd_scopes = cmds_used
+                                    .into_iter()
+                                    .map(|name| {
+                                        let scope = context
+                                            .registry
+                                            .get_scope(&name)
+                                            .expect("name should be in regsitry");
+                                        (name, scope)
+                                    })
+                                    .collect();
+                                let block = AliasBlock {
+                                    block,
+                                    arg_shapes,
+                                    cmd_scopes,
+                                };
+
                                 context.add_commands(vec![whole_stream_command(
                                     AliasCommand::new(name, block),
                                 )]);

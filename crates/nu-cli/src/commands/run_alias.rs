@@ -3,9 +3,19 @@ use crate::commands::WholeStreamCommand;
 use crate::prelude::*;
 
 use derive_new::new;
+use serde::{Deserialize, Serialize};
+
 use nu_errors::ShellError;
-use nu_protocol::hir::AliasBlock;
-use nu_protocol::Signature;
+use nu_protocol::hir::Block;
+use nu_protocol::{Signature, SyntaxShape};
+
+// TODO other derives?
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AliasBlock {
+    pub block: Block,
+    pub arg_shapes: Vec<(String, SyntaxShape)>,
+    pub cmd_scopes: Vec<(String, usize)>,
+}
 
 #[derive(new, Clone)]
 pub struct AliasCommand {

@@ -12,13 +12,15 @@ use std::error::Error;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
-// struct CommandScope {
-//
-// }
+pub enum ScopedCommand {
+    Builtin(Command),
+    User(Command, Option<Command>),
+}
 
 #[derive(Debug, Clone, Default)]
 pub struct CommandRegistry {
     core: CommandRegistryCore,
+    // registry: Arc<Mutex<IndexMap<String, Vec<ScopedCommand>>>>,
     scope: IndexMap<String, usize>,
 }
 
@@ -26,6 +28,7 @@ impl CommandRegistry {
     pub fn new() -> CommandRegistry {
         CommandRegistry {
             core: CommandRegistryCore::new(),
+            // registry: Arc::new(Mutex::new(IndexMap::default())),
             scope: IndexMap::default(),
         }
     }
