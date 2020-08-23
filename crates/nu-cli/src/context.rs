@@ -8,52 +8,48 @@ use nu_parser::SignatureRegistry;
 use nu_protocol::{hir, Scope, Signature};
 use nu_source::{Tag, Text};
 use parking_lot::Mutex;
+use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
+// TODO other derives?
+// #[derive(Debug, Clone, Serialize, Deserialize)]
+// pub struct Hidden(ScopedCommand);
+
+// TODO COMMAND ITSELF IS AN ARC AGH
+// TODO other derives?
+#[derive(Debug, Clone)] // , Serialize, Deserialize)]
 pub enum ScopedCommand {
     Builtin(Command),
-    User(Command, Option<Command>),
+    User(Command, Option<Arc<ScopedCommand>>),
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct CommandRegistry {
-    core: CommandRegistryCore,
-    // registry: Arc<Mutex<IndexMap<String, Vec<ScopedCommand>>>>,
-    scope: IndexMap<String, usize>,
+    // core: CommandRegistryCore,
+    registry: Arc<Mutex<IndexMap<String, ScopedCommand>>>,
+    custom_scope: IndexMap<String, Arc<ScopedCommand>>,
 }
 
 impl CommandRegistry {
     pub fn new() -> CommandRegistry {
         CommandRegistry {
-            core: CommandRegistryCore::new(),
-            // registry: Arc::new(Mutex::new(IndexMap::default())),
-            scope: IndexMap::default(),
+            // core: CommandRegistryCore::new(),
+            registry: Arc::new(Mutex::new(IndexMap::default())),
+            custom_scope: IndexMap::default(),
         }
-    }
-
-    fn get_in_scope(&self, name: &str) -> Option<Command> {
-        let registry = self.core.registry.lock();
-
-        registry.get(name).map(|vec| {
-            match self.scope.get(name) {
-                None => vec.last(),
-                Some(i) => vec.get(*i),
-            }
-            .expect("command scope indexing failure")
-            .to_owned()
-        })
     }
 }
 
 impl SignatureRegistry for CommandRegistry {
     fn has(&self, name: &str) -> bool {
-        self.core.has(name)
+        let registry = self.registry.lock();
+        registry.contains_key(name)
     }
 
     fn get(&self, name: &str) -> Option<Signature> {
-        self.get_in_scope(name).map(|cmd| cmd.signature())
+        self.get_command(name).map(|cmd| cmd.signature())
     }
 
     fn clone_box(&self) -> Box<dyn SignatureRegistry> {
@@ -63,11 +59,29 @@ impl SignatureRegistry for CommandRegistry {
 
 impl CommandRegistry {
     pub fn get_command(&self, name: &str) -> Option<Command> {
-        self.get_in_scope(name)
+        if let Some(&sc) = self.custom_scope.get(name) {
+            return match sc.make_mut() {
+                // TODO proper use?
+                ScopedCommand::Builtin(cmd) | ScopedCommand::User(cmd, _) => Some(cmd),
+            };
+        }
+
+        let registry = self.registry.lock();
+        registry.get(name).map(|scoped| match scoped {
+            None => None,
+            Some(sc) => match sc {
+                ScopedCommand::Builtin(cmd) => Some(cmd),
+                ScopedCommand::User(cmd, _) => Some(cmd),
+            },
+        })
     }
 
+    // pub fn get_command(&self, name: &str) -> Option<Command> {
+    //     self.get_in_scope(name)
+    // }
+
     pub fn expect_command(&self, name: &str) -> Result<Command, ShellError> {
-        self.get_in_scope(name)
+        self.get_command(name)
             .ok_or(ShellError::untagged_runtime_error(format!(
                 "Could not load command: {}",
                 name
@@ -75,88 +89,15 @@ impl CommandRegistry {
     }
 
     pub fn has(&self, name: &str) -> bool {
-        self.core.has(name)
+        self.registry.has(name)
     }
-
-    pub fn insert(&mut self, name: impl Into<String>, command: Command) {
-        self.core.insert(name, command)
-    }
-
-    pub fn names(&self) -> Vec<String> {
-        self.core.names()
-    }
-
-    pub fn get_scope(&self, name: &str) -> Option<usize> {
-        match self.scope.get(name) {
-            Some(sc) => Some(*sc),
-            None => {
-                let registry = self.core.registry.lock();
-                registry.get(name).map(|vec| vec.len() - 1)
-            }
-        }
-    }
-
-    pub fn set_scope(&mut self, name: &str, scope: usize) {
-        self.scope.insert(name.to_string(), scope);
-    }
-}
-
-#[derive(Debug, Clone, Default)]
-struct CommandRegistryCore {
-    // TODO elim entirely?
-    // TODO does this mess up allocation or something?
-    registry: Arc<Mutex<IndexMap<String, Vec<Command>>>>,
-}
-
-impl CommandRegistryCore {
-    // TODO SignatureRegistry for
-    fn has(&self, name: &str) -> bool {
-        let registry = self.registry.lock();
-        registry.contains_key(name)
-    }
-
-    // fn get(&self, name: &str) -> Option<Vec<Signature>> {
-    //     let registry = self.registry.lock();
-    //     registry
-    //         .get(name)
-    //         .map(|vec| vec.iter().map(|cmd| cmd.signature()).collect())
-    // }
-
-    // // TODO can eliminate?
-    // fn clone_box(&self) -> Box<dyn SignatureRegistry> {
-    //     Box::new(self.clone())
-    // }
-}
-
-impl CommandRegistryCore {
-    pub fn new() -> CommandRegistryCore {
-        CommandRegistryCore {
-            registry: Arc::new(Mutex::new(IndexMap::default())),
-        }
-    }
-}
-
-impl CommandRegistryCore {
-    // pub fn expect_command(&self, name: &str) -> Result<&Vec<Command>, ShellError> {
-    //     self.get_command(name).ok_or_else(|| {
-    //         ShellError::untagged_runtime_error(format!("Could not load command: {}", name))
-    //     })
-    // }
-
-    // pub fn has(&self, name: &str) -> bool {
-    //     let registry = self.registry.lock();
-    //
-    //     registry.contains_key(name)
-    // }
 
     pub fn insert(&mut self, name: impl Into<String>, command: Command) {
         let mut registry = self.registry.lock();
         let name = name.into();
         match registry.get_mut(&name) {
-            None => {
-                registry.insert(name, vec![command]);
-            }
-            Some(vec) => vec.push(command),
+            None => registry.insert(name, Some(ScopedCommand::Builtin(command))), // TODO
+            Some(sc) => registry.insert(name, Some(ScopedCommand::Builtin(command))),
         };
     }
 
@@ -164,7 +105,85 @@ impl CommandRegistryCore {
         let registry = self.registry.lock();
         registry.keys().cloned().collect()
     }
+
+    // TODO misleading name
+    pub fn get_scope(&self, name: &str) -> Option<Arc<ScopedCommand>> /*TODO*/ {
+        match self.custom_scope.get(name) {
+            Some(sc) => Some(sc),
+            None => {
+                let registry = self.registry.lock();
+                let current = registry.get(name)?;
+                Some(Arc::new(current)) // TODO will be different Arc than eventually created - problem?
+            }
+        }
+    }
+
+    pub fn set_scope(&mut self, name: &str, scope: Arc<ScopedCommand> /*TODO*/) {
+        self.custom_scope.insert(name.to_string(), scope);
+    }
 }
+
+// #[derive(Debug, Clone, Default)]
+// struct CommandRegistryCore {
+//     registry: Arc<Mutex<IndexMap<String, Vec<Command>>>>,
+// }
+//
+// impl CommandRegistryCore {
+// fn has(&self, name: &str) -> bool {
+//     let registry = self.registry.lock();
+//     registry.contains_key(name)
+// }
+
+// fn get(&self, name: &str) -> Option<Vec<Signature>> {
+//     let registry = self.registry.lock();
+//     registry
+//         .get(name)
+//         .map(|vec| vec.iter().map(|cmd| cmd.signature()).collect())
+// }
+
+// // TODO can eliminate?
+// fn clone_box(&self) -> Box<dyn SignatureRegistry> {
+//     Box::new(self.clone())
+// }
+// }
+
+// impl CommandRegistryCore {
+//     pub fn new() -> CommandRegistryCore {
+//         CommandRegistryCore {
+//             registry: Arc::new(Mutex::new(IndexMap::default())),
+//         }
+//     }
+// }
+
+// impl CommandRegistryCore {
+// pub fn expect_command(&self, name: &str) -> Result<&Vec<Command>, ShellError> {
+//     self.get_command(name).ok_or_else(|| {
+//         ShellError::untagged_runtime_error(format!("Could not load command: {}", name))
+//     })
+// }
+
+// pub fn has(&self, name: &str) -> bool {
+//     let registry = self.registry.lock();
+//
+//     registry.contains_key(name)
+// }
+
+// pub fn insert(&mut self, name: impl Into<String>, command: Command) {
+//     let mut registry = self.registry.lock();
+//     let name = name.into();
+//     match registry.get_mut(&name) {
+//         None => {
+//             registry.insert(name, vec![command]);
+//         }
+//         Some(vec) => vec.push(command),
+//     };
+// }
+
+// pub fn names(&self) -> Vec<String> {
+//     let registry = self.registry.lock();
+//     registry.keys().cloned().collect()
+// }
+// }
 
 #[derive(Clone)]
 pub struct Context {

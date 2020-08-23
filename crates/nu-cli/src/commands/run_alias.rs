@@ -5,16 +5,17 @@ use crate::prelude::*;
 use derive_new::new;
 use serde::{Deserialize, Serialize};
 
+use crate::context::ScopedCommand;
 use nu_errors::ShellError;
 use nu_protocol::hir::Block;
 use nu_protocol::{Signature, SyntaxShape};
 
 // TODO other derives?
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)] // , Serialize, Deserialize)]
 pub struct AliasBlock {
     pub block: Block,
     pub arg_shapes: Vec<(String, SyntaxShape)>,
-    pub cmd_scopes: Vec<(String, usize)>,
+    pub cmd_scopes: Vec<(String, Arc<ScopedCommand>)>,
 }
 
 #[derive(new, Clone)]
@@ -51,7 +52,7 @@ impl WholeStreamCommand for AliasCommand {
         let call_info = args.call_info.clone();
         let mut registry = registry.clone();
         for (cmd, scope) in &self.block.cmd_scopes {
-            registry.set_scope(cmd, *scope)
+            registry.set_scope(cmd, Arc::clone(scope))
         }
 
         let mut block = self.block.block.clone();
