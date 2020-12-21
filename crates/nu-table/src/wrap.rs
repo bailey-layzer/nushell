@@ -23,13 +23,13 @@ pub struct Line<'a> {
     pub width: usize,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct WrappedLine {
     pub line: String,
     pub width: usize,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct WrappedCell {
     pub lines: Vec<WrappedLine>,
     pub max_width: usize,

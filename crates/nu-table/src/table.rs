@@ -1,5 +1,8 @@
-use crate::wrap::{column_width, split_sublines, wrap, Alignment, Subline, WrappedCell};
+use crate::wrap::{
+    column_width, split_sublines, wrap, Alignment, Subline, WrappedCell, WrappedLine,
+};
 use ansi_term::{Color, Style};
+use std::cmp::max;
 use std::collections::HashMap;
 
 enum SeparatorPosition {
@@ -621,7 +624,7 @@ pub struct ProcessedCell<'a> {
     pub style: TextStyle,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct WrappedTable {
     pub column_widths: Vec<usize>,
     pub headers: Vec<WrappedCell>,
@@ -629,7 +632,102 @@ pub struct WrappedTable {
     pub theme: Theme,
 }
 
+// TODO may be rife with off-by-one
 impl WrappedTable {
+    fn collapse_width(self, max_width: usize) -> Self {
+        // TODO this accounts for ellipsis
+        let ncols = self.column_widths.len();
+        let ellipsis_width = ncols.to_string().len();
+
+        // "(xyz cols)" is 10 chars TODO >999?
+        // TODO move all of this logic earlier?
+        let max_width = max_width - ellipsis_width - 10 - 2;
+
+        // TODO works for one-column case?
+        let mut width = self.column_widths[ncols - 1] + self.theme.print_right_border as usize;
+        let mut ellipsis_col = None;
+
+        // TODO as iterator?
+        for i in 0..ncols - 1 {
+            let mut col_width = self.column_widths[i] + 2;
+            if i != 0 || self.theme.print_left_border {
+                col_width += 1;
+            }
+            // if i == ncols && self.theme.print_right_border {
+            //     col_width += 1;
+            // }
+            if width + col_width > max_width {
+                ellipsis_col = Some(i);
+                break;
+            } else {
+                width += col_width;
+            }
+        }
+
+        return match ellipsis_col {
+            // TODO should this even be an option?
+            None => self,
+            Some(ellipsis_col) => {
+                // let ellipsis_header = WrappedCell {
+                //     lines: vec![WrappedLine {
+                //         line: "...".to_string(),
+                //         width: 3,
+                //     }],
+                //     max_width: 3,
+                //     style: self.headers[ellipsis_col].style.clone(),
+                // };
+
+                let mut headers: Vec<WrappedCell> =
+                    self.headers[0..ellipsis_col].iter().cloned().collect();
+                let line = format!("({} cols)", ncols - ellipsis_col);
+                let max_width = line.len();
+                headers.push(WrappedCell {
+                    lines: vec![WrappedLine {
+                        line,
+                        width: max_width,
+                    }],
+                    max_width,
+                    style: self.headers[ellipsis_col].style,
+                });
+                headers.push(self.headers[ncols - 1].clone());
+
+                // TODO can data be empty?
+                // let ellipsis_body = ;
+                let data = self
+                    .data
+                    .iter()
+                    .map(|row| {
+                        let mut trimmed = row[0..ellipsis_col].iter().cloned().collect::<Vec<_>>();
+                        trimmed.push(WrappedCell {
+                            lines: vec![WrappedLine {
+                                line: String::from("  ...  "),
+                                width: 7,
+                            }],
+                            max_width,
+                            style: self.data[0][ellipsis_col].style,
+                        });
+                        trimmed.push(row[ncols - 1].clone());
+                        trimmed
+                    })
+                    .collect();
+
+                let mut column_widths: Vec<usize> = self.column_widths[0..ellipsis_col]
+                    .iter()
+                    .cloned()
+                    .collect();
+                column_widths.push(max_width);
+                column_widths.push(self.column_widths[ncols - 1]);
+
+                WrappedTable {
+                    column_widths,
+                    headers,
+                    data,
+                    theme: self.theme,
+                }
+            }
+        };
+    }
+
     fn print_separator(
         &self,
         separator_position: SeparatorPosition,
@@ -644,6 +742,7 @@ impl WrappedTable {
 
         match separator_position {
             SeparatorPosition::Top => {
+                // [..8]
                 for column in self.column_widths.iter().enumerate() {
                     if column.0 == 0 && self.theme.print_left_border {
                         output.push_str(
@@ -688,6 +787,7 @@ impl WrappedTable {
                     }
                 }
             }
+            // [..8]
             SeparatorPosition::Middle => {
                 for column in self.column_widths.iter().enumerate() {
                     if column.0 == 0 && self.theme.print_left_border {
@@ -731,6 +831,7 @@ impl WrappedTable {
                     }
                 }
             }
+            // [..8]
             SeparatorPosition::Bottom => {
                 for column in self.column_widths.iter().enumerate() {
                     if column.0 == 0 && self.theme.print_left_border {
@@ -884,6 +985,7 @@ impl WrappedTable {
         let skip_headers = (self.headers.len() == 2 && self.headers[1].max_width == 0)
             || (self.headers.len() == 1 && self.headers[0].max_width == 0);
 
+        // [..8]
         if !self.headers.is_empty() && !skip_headers {
             self.print_cell_contents(&self.headers, &color_hm);
         }
@@ -903,7 +1005,8 @@ impl WrappedTable {
                 }
             }
 
-            self.print_cell_contents(row, &color_hm);
+            // [..8]
+            self.print_cell_contents(&row, &color_hm);
         }
 
         if self.theme.print_bottom_border {
@@ -941,8 +1044,6 @@ fn process_table(table: &Table) -> ProcessedTable {
 }
 
 fn get_max_column_widths(processed_table: &ProcessedTable) -> Vec<usize> {
-    use std::cmp::max;
-
     let mut max_num_columns = 0;
 
     max_num_columns = max(max_num_columns, processed_table.headers.len());
@@ -994,13 +1095,29 @@ pub fn draw_table(table: &Table, termwidth: usize, color_hm: &HashMap<String, St
         headers_len
     };
 
+    let sep_total = 3 * (headers_len - 1);
+    let max_total: usize = max_per_column.iter().sum::<usize>() + sep_total; // TODO check
+
+    let view_width = if max_total < termwidth {
+        termwidth
+    // TODO tune heuristic
+    } else if max_total < 6 * termwidth {
+        // max_total / 2
+        2 * termwidth
+    } else {
+        max_total / 2
+        //     println!("DANGER ZONE {:?}", max_total);
+        //     return;
+    };
+
     // Measure how big our columns need to be (accounting for separators also)
-    let max_naive_column_width = (termwidth - 3 * (headers_len - 1)) / headers_len;
+    // TODO protect from the same trap (TODO tests?)
+    let max_naive_column_width = (view_width - sep_total) / headers_len;
 
     let column_space = ColumnSpace::measure(&max_per_column, max_naive_column_width, headers_len);
 
     // This gives us the max column width
-    let max_column_width = column_space.max_width(termwidth);
+    let max_column_width = column_space.max_width(view_width);
 
     // This width isn't quite right, as we're rounding off some of our space
     let column_space = column_space.fix_almost_column_width(
@@ -1010,10 +1127,19 @@ pub fn draw_table(table: &Table, termwidth: usize, color_hm: &HashMap<String, St
         headers_len,
     );
 
-    // This should give us the final max column width
-    let max_column_width = column_space.max_width(termwidth);
+    println!("{:#?}", column_space);
 
-    let wrapped_table = wrap_cells(processed_table, max_column_width, &color_hm);
+    // This should give us the final max column width
+    let max_column_width = column_space.max_width(view_width);
+
+    println!("max width {:?}", max_column_width);
+
+    // println!("processed table {:#?}", processed_table);
+
+    let wrapped_table =
+        wrap_cells(processed_table, max_column_width, &color_hm).collapse_width(termwidth);
+
+    // println!("wrapped table {:#?}", wrapped_table);
 
     wrapped_table.print_table(&color_hm);
 }
@@ -1089,6 +1215,8 @@ fn wrap_cells(
     }
 }
 
+// TODO un-debug?
+#[derive(Debug)]
 struct ColumnSpace {
     num_overages: usize,
     underage_sum: usize,
@@ -1096,6 +1224,7 @@ struct ColumnSpace {
 }
 
 impl ColumnSpace {
+    // TODO? does not account for theme.print_left_border
     /// Measure how much space we have once we subtract off the columns who are small enough
     fn measure(
         max_per_column: &[usize],
