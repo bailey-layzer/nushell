@@ -1,6 +1,7 @@
 use crate::wrap::{column_width, split_sublines, wrap, Alignment, Subline, WrappedCell};
 use ansi_term::{Color, Style};
 use std::collections::HashMap;
+use std::cmp::max;
 
 enum SeparatorPosition {
     Top,
@@ -644,6 +645,7 @@ impl WrappedTable {
 
         match separator_position {
             SeparatorPosition::Top => {
+                // [..8]
                 for column in self.column_widths.iter().enumerate() {
                     if column.0 == 0 && self.theme.print_left_border {
                         output.push_str(
@@ -688,6 +690,7 @@ impl WrappedTable {
                     }
                 }
             }
+            // [..8]
             SeparatorPosition::Middle => {
                 for column in self.column_widths.iter().enumerate() {
                     if column.0 == 0 && self.theme.print_left_border {
@@ -731,6 +734,7 @@ impl WrappedTable {
                     }
                 }
             }
+            // [..8]
             SeparatorPosition::Bottom => {
                 for column in self.column_widths.iter().enumerate() {
                     if column.0 == 0 && self.theme.print_left_border {
@@ -884,6 +888,7 @@ impl WrappedTable {
         let skip_headers = (self.headers.len() == 2 && self.headers[1].max_width == 0)
             || (self.headers.len() == 1 && self.headers[0].max_width == 0);
 
+        // [..8]
         if !self.headers.is_empty() && !skip_headers {
             self.print_cell_contents(&self.headers, &color_hm);
         }
@@ -903,7 +908,8 @@ impl WrappedTable {
                 }
             }
 
-            self.print_cell_contents(row, &color_hm);
+            // [..8]
+            self.print_cell_contents(&row, &color_hm);
         }
 
         if self.theme.print_bottom_border {
@@ -941,8 +947,6 @@ fn process_table(table: &Table) -> ProcessedTable {
 }
 
 fn get_max_column_widths(processed_table: &ProcessedTable) -> Vec<usize> {
-    use std::cmp::max;
-
     let mut max_num_columns = 0;
 
     max_num_columns = max(max_num_columns, processed_table.headers.len());
@@ -983,6 +987,21 @@ pub fn draw_table(table: &Table, termwidth: usize, color_hm: &HashMap<String, St
     // maybe_truncate_columns(&mut headers, &mut entries, termwidth);
     let headers_len = table.headers.len();
 
+    let sep_total = 3 * (headers_len - 1);
+
+    // TODO check
+    let max_total: usize = max_per_column.iter().sum::<usize>() + sep_total;
+
+    let view_width = if max_total < termwidth {
+        termwidth
+    // TODO tune heuristic
+    } else if max_total < 6 * termwidth {
+        2 * termwidth
+    } else {
+        println!("DANGER ZONE {:?}", max_total);
+        return;
+    };
+
     // fix the length of the table if there are no headers:
     let headers_len = if headers_len == 0 {
         if !table.data.is_empty() && !table.data[0].is_empty() {
@@ -995,7 +1014,7 @@ pub fn draw_table(table: &Table, termwidth: usize, color_hm: &HashMap<String, St
     };
 
     // Measure how big our columns need to be (accounting for separators also)
-    let max_naive_column_width = (termwidth - 3 * (headers_len - 1)) / headers_len;
+    let max_naive_column_width = (termwidth - sep_total) / headers_len;
 
     let column_space = ColumnSpace::measure(&max_per_column, max_naive_column_width, headers_len);
 
@@ -1010,10 +1029,18 @@ pub fn draw_table(table: &Table, termwidth: usize, color_hm: &HashMap<String, St
         headers_len,
     );
 
+    println!("{:#?}", column_space);
+
     // This should give us the final max column width
     let max_column_width = column_space.max_width(termwidth);
 
+    println!("max width {:?}", max_column_width);
+
+    // println!("processed table {:#?}", processed_table);
+
     let wrapped_table = wrap_cells(processed_table, max_column_width, &color_hm);
+
+    // println!("wrapped table {:#?}", wrapped_table);
 
     wrapped_table.print_table(&color_hm);
 }
@@ -1089,6 +1116,7 @@ fn wrap_cells(
     }
 }
 
+#[derive(Debug)]
 struct ColumnSpace {
     num_overages: usize,
     underage_sum: usize,
