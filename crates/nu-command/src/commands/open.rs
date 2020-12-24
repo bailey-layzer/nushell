@@ -2,6 +2,7 @@ use crate::commands::constants::BAT_LANGUAGES;
 use crate::prelude::*;
 use encoding_rs::{Encoding, UTF_8};
 use futures_util::StreamExt;
+use hdf5::types::{Array, FixedAscii, TypeDescriptor, VarLenAscii};
 use log::debug;
 use nu_engine::StringOrBinary;
 use nu_engine::WholeStreamCommand;
@@ -93,6 +94,121 @@ pub fn get_encoding(opt: Option<Tagged<String>>) -> Result<&'static Encoding, Sh
     }
 }
 
+fn read_hdf5(path: Tagged<PathBuf>) -> Result<OutputStream, ShellError> {
+    match hdf5::File::open(path.as_path()) {
+        Ok(file) => {
+            // file.access_plist()
+            //     .map(|l| println!("{:#?}", l.properties()));
+            return read_group(&*file);
+            // for name in file
+            //     .clone() // TODO
+            //     .member_names()
+            //     .map_err(|_| ShellError::unimplemented(""))?
+            // {
+            //     // for name in vec!["axis0"] {
+            //     println!("==== {:?} =====", name);
+            //     println!("{:#?}", file.dataset(&name));
+            //     let group = file
+            //         .group(&name)
+            //         .map_err(|_| ShellError::unimplemented(""))?;
+            //     // TODO top level can be a dataset?
+            //     read_group(group);
+            // }
+
+            // return Ok(OutputStream::empty());
+        }
+        Err(e) => {
+            return Err(ShellError::labeled_error(
+                "Cannot open file as HDF5",
+                "TODO",
+                path.tag.clone(),
+            ));
+        }
+    }
+    // println!("{:?}", file.member_names());
+}
+
+fn read_child(group: hdf5::Group) {}
+
+// #[derive(Debug, hdf5::H5Type)]
+// #[repr(C)]
+// struct AsciiAxis {
+//     contents: &'static str,
+// }
+
+fn read_group(group: &hdf5::Group) -> Result<OutputStream, ShellError> {
+    for name in group
+        .member_names()
+        .map_err(|_| ShellError::unimplemented(""))?
+    {
+        match group.dataset(&name) {
+            Ok(dset) => {
+                println!("NAME {}", name);
+                println!("SHAPE {:?}", dset.shape());
+                let dtype = dset.dtype().unwrap();
+                println!("TYPE {:?}", dtype.to_descriptor());
+                match dtype.to_descriptor().unwrap() {
+                    TypeDescriptor::Integer(_) => {
+                        // read_dyn
+                        let data = dset.read_dyn::<i64>(); // .unwrap();
+                        println!("{:#?}", data);
+                        data.unwrap()
+                            .clone()
+                            .genrows()
+                            .into_iter()
+                            .map(|row| {
+                                println!("{:#?}", row);
+                            })
+                            .for_each(drop);
+                        // return Ok(OutputStream::empty());
+
+                        // .to_output_stream());
+                    }
+                    TypeDescriptor::Unsigned(_) => {
+                        // TODO care about less?
+                        let data = dset.read_2d::<u64>();
+                        println!("READ {:?}", data);
+                    }
+                    TypeDescriptor::Float(_) => {
+                        let data = dset.read_raw::<f64>();
+                    }
+                    TypeDescriptor::Boolean => {}
+                    TypeDescriptor::Enum(_) => {}
+                    TypeDescriptor::Compound(_) => {}
+                    TypeDescriptor::FixedArray(_, _) => {}
+                    TypeDescriptor::FixedAscii(size) => {
+                        // let data: Vec<AsciiAxis> = dset.read_raw().unwrap();
+                        // println!("READ {:?}", data);
+                        let data = dset
+                            .as_reader()
+                            // TODO problem of fixed length
+                            .read_raw::<FixedAscii<[u8; 16]>>()
+                            .unwrap();
+                        println!(
+                            "READ {:?}",
+                            data.iter().map(|a| a.as_str()).collect::<Vec<_>>()
+                        );
+                    }
+                    TypeDescriptor::FixedUnicode(_) => {}
+                    TypeDescriptor::VarLenArray(_) => {}
+                    TypeDescriptor::VarLenAscii => {}
+                    TypeDescriptor::VarLenUnicode => {}
+                }
+
+                // println!("{:?}", dset.read_raw::<String>());
+
+                println!();
+            }
+            Err(e) => {
+                // .map_err(|_| ShellError::unimplemented("))?;
+                read_group(&group.group(&name).expect("TODO not a group or dataset?"));
+            }
+        };
+    }
+
+    Ok(OutputStream::empty())
+}
+
 async fn open(args: CommandArgs) -> Result<OutputStream, ShellError> {
     let scope = args.scope.clone();
     let cwd = PathBuf::from(args.shell_manager.path());
@@ -121,6 +237,10 @@ async fn open(args: CommandArgs) -> Result<OutputStream, ShellError> {
     };
 
     if let Some(ext) = ext {
+        if ext == "h5" {
+            return read_hdf5(path);
+        }
+
         // Check if we have a conversion command
         if let Some(_command) = scope.get_command(&format!("from {}", ext)) {
             let (_, tagged_contents) = crate::commands::open::fetch(
