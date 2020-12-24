@@ -7,7 +7,9 @@ use log::debug;
 use nu_engine::StringOrBinary;
 use nu_engine::WholeStreamCommand;
 use nu_errors::ShellError;
-use nu_protocol::{CommandAction, ReturnSuccess, Signature, SyntaxShape, UntaggedValue, Value};
+use nu_protocol::{
+    CommandAction, ReturnSuccess, Signature, SyntaxShape, TaggedDictBuilder, UntaggedValue, Value,
+};
 use nu_source::{AnchorLocation, Span, Tagged};
 use std::path::PathBuf;
 
@@ -95,11 +97,13 @@ pub fn get_encoding(opt: Option<Tagged<String>>) -> Result<&'static Encoding, Sh
 }
 
 fn read_hdf5(path: Tagged<PathBuf>) -> Result<OutputStream, ShellError> {
-    match hdf5::File::open(path.as_path()) {
+    return match hdf5::File::open(path.as_path()) {
         Ok(file) => {
             // file.access_plist()
             //     .map(|l| println!("{:#?}", l.properties()));
-            return read_group(&*file);
+
+            // dereferencing a File makes a Group
+            Ok(futures::stream::iter(read_group(&*file)).to_output_stream())
             // for name in file
             //     .clone() // TODO
             //     .member_names()
@@ -117,14 +121,12 @@ fn read_hdf5(path: Tagged<PathBuf>) -> Result<OutputStream, ShellError> {
 
             // return Ok(OutputStream::empty());
         }
-        Err(e) => {
-            return Err(ShellError::labeled_error(
-                "Cannot open file as HDF5",
-                "TODO",
-                path.tag.clone(),
-            ));
-        }
-    }
+        Err(e) => Err(ShellError::labeled_error(
+            "Cannot open file as HDF5",
+            "TODO",
+            path.tag.clone(),
+        )),
+    };
     // println!("{:?}", file.member_names());
 }
 
@@ -136,77 +138,116 @@ fn read_child(group: hdf5::Group) {}
 //     contents: &'static str,
 // }
 
-fn read_group(group: &hdf5::Group) -> Result<OutputStream, ShellError> {
-    for name in group
-        .member_names()
-        .map_err(|_| ShellError::unimplemented(""))?
-    {
-        match group.dataset(&name) {
-            Ok(dset) => {
-                println!("NAME {}", name);
-                println!("SHAPE {:?}", dset.shape());
-                let dtype = dset.dtype().unwrap();
-                println!("TYPE {:?}", dtype.to_descriptor());
-                match dtype.to_descriptor().unwrap() {
-                    TypeDescriptor::Integer(_) => {
-                        // read_dyn
-                        let data = dset.read_dyn::<i64>(); // .unwrap();
-                        println!("{:#?}", data);
-                        data.unwrap()
-                            .clone()
-                            .genrows()
-                            .into_iter()
-                            .map(|row| {
-                                println!("{:#?}", row);
-                            })
-                            .for_each(drop);
-                        // return Ok(OutputStream::empty());
+fn read_dataset(dset: hdf5::Dataset) -> Result<Value, ShellError> {
+    // println!("NAME {}", name);
+    println!("SHAPE {:?}", dset.shape());
+    let dtype = dset.dtype().unwrap();
+    println!("TYPE {:?}", dtype.to_descriptor());
 
-                        // .to_output_stream());
-                    }
-                    TypeDescriptor::Unsigned(_) => {
-                        // TODO care about less?
-                        let data = dset.read_2d::<u64>();
-                        println!("READ {:?}", data);
-                    }
-                    TypeDescriptor::Float(_) => {
-                        let data = dset.read_raw::<f64>();
-                    }
-                    TypeDescriptor::Boolean => {}
-                    TypeDescriptor::Enum(_) => {}
-                    TypeDescriptor::Compound(_) => {}
-                    TypeDescriptor::FixedArray(_, _) => {}
-                    TypeDescriptor::FixedAscii(size) => {
-                        // let data: Vec<AsciiAxis> = dset.read_raw().unwrap();
-                        // println!("READ {:?}", data);
-                        let data = dset
-                            .as_reader()
-                            // TODO problem of fixed length
-                            .read_raw::<FixedAscii<[u8; 16]>>()
-                            .unwrap();
-                        println!(
-                            "READ {:?}",
-                            data.iter().map(|a| a.as_str()).collect::<Vec<_>>()
-                        );
-                    }
-                    TypeDescriptor::FixedUnicode(_) => {}
-                    TypeDescriptor::VarLenArray(_) => {}
-                    TypeDescriptor::VarLenAscii => {}
-                    TypeDescriptor::VarLenUnicode => {}
-                }
+    match dtype.to_descriptor().unwrap() {
+        // TODO see issue with h5ex_t_vlstringatt.h5
+        TypeDescriptor::Integer(_) => {
+            // println!("READ {:?}", dset.read_2d::<i64>());
+            Ok(UntaggedValue::Table(
+                dset.read_dyn::<i64>()
+                    .unwrap()
+                    // .clone()
+                    .outer_iter()
+                    // .genrows()
+                    // .into_iter()
+                    .map(|row| {
+                        UntaggedValue::row(
+                            row.iter()
+                                .enumerate()
+                                .map(|(i, val)| {
+                                    (
+                                        format!("Column{}", i),
+                                        UntaggedValue::int(*val).into_untagged_value(),
+                                    )
+                                })
+                                .collect::<IndexMap<String, Value>>(),
+                        )
+                        .into_untagged_value()
+                    })
+                    .collect::<Vec<_>>(),
+            )
+            .into_untagged_value())
+            // TODO into_untagged_values a problem?
 
-                // println!("{:?}", dset.read_raw::<String>());
+            // Ok(futures::stream::iter(
+            //     .to_output_stream());
+        }
+        _ => Err(ShellError::unimplemented("")),
+        // TypeDescriptor::Unsigned(_) => {
+        //     // TODO care about less?
+        //     let data = dset.read_2d::<u64>();
+        //     println!("READ {:?}", data);
+        // }
+        // TypeDescriptor::Float(_) => {
+        //     let data = dset.read_raw::<f64>();
+        // }
+        // TypeDescriptor::Boolean => {}
+        // TypeDescriptor::Enum(_) => {}
+        // TypeDescriptor::Compound(_) => {}
+        // TypeDescriptor::FixedArray(_, _) => {}
+        // TypeDescriptor::FixedAscii(size) => {
+        //     // let data: Vec<AsciiAxis> = dset.read_raw().unwrap();
+        //     // println!("READ {:?}", data);
+        //     let data = dset
+        //         .as_reader()
+        //         // TODO problem of fixed length
+        //         .read_raw::<FixedAscii<[u8; 16]>>()
+        //         .unwrap();
+        //     println!(
+        //         "READ {:?}",
+        //         data.iter().map(|a| a.as_str()).collect::<Vec<_>>()
+        //     );
+        // }
+        // TypeDescriptor::FixedUnicode(_) => {}
+        // TypeDescriptor::VarLenArray(_) => {}
+        // TypeDescriptor::VarLenAscii => {}
+        // TypeDescriptor::VarLenUnicode => {}
+    }
+}
 
-                println!();
-            }
+// println!("{:?}", dset.read_raw::<String>());
+
+// println!();}
+
+fn read_group(group: &hdf5::Group) -> Result<Value, ShellError> {
+    let members = group.member_names().map_err(|e| {
+        ShellError::untagged_runtime_error(format!("problem reading HDF file: {:?}", e))
+    })?;
+    // TODO handle only one dataset differently?
+
+    // TODO with_capacity?
+    let mut dict = TaggedDictBuilder::new(Tag::unknown()); // TODO is it known?
+    for name in members {
+        let val = match group.dataset(&name) {
+            Ok(dset) => read_dataset(dset),
             Err(e) => {
                 // .map_err(|_| ShellError::unimplemented("))?;
-                read_group(&group.group(&name).expect("TODO not a group or dataset?"));
-            }
+                read_group(&group.group(&name).expect("TODO not a group or dataset?"))
+            } // TODO need to do something with the err?
         };
+        if let Ok(val) = val {
+            dict.insert_value(name, val);
+        }
     }
 
-    Ok(OutputStream::empty())
+    // TODO return/add to builder as untagged value instead??
+    Ok(dict.into_value())
+
+    // .iter()
+    // .filter_map(|name| {
+    //     (
+    //         name.clone(),
+    //
+    //     )
+    // })
+    // .collect::<IndexMap<String, Value>>(),
+    // )
+    // .into_untagged_value())
 }
 
 async fn open(args: CommandArgs) -> Result<OutputStream, ShellError> {
