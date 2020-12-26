@@ -1,7 +1,7 @@
 use crate::wrap::{column_width, split_sublines, wrap, Alignment, Subline, WrappedCell};
 use ansi_term::{Color, Style};
-use std::collections::HashMap;
 use std::cmp::max;
+use std::collections::HashMap;
 
 enum SeparatorPosition {
     Top,
@@ -567,6 +567,7 @@ impl Theme {
             print_bottom_border: true,
         }
     }
+
     #[allow(unused)]
     pub fn none() -> Theme {
         Theme {
@@ -630,10 +631,22 @@ pub struct WrappedTable {
     pub theme: Theme,
 }
 
+macro_rules! make_push_sep {
+    ($output: ident, $sep_color: ident, $theme: expr, $print_width:ident) => {
+        macro_rules! push_sep {
+            ( $sep:ident ) => {
+                $output.push_str(&$sep_color.paint(&$theme.$sep.to_string()).to_string());
+                $print_width += 1;
+            };
+        }
+    };
+}
+
 impl WrappedTable {
     fn print_separator(
         &self,
         separator_position: SeparatorPosition,
+        termwidth: usize,
         color_hm: &HashMap<String, Style>,
     ) {
         let column_count = self.column_widths.len();
@@ -643,50 +656,71 @@ impl WrappedTable {
             .unwrap_or(&Style::default())
             .to_owned();
 
+        let mut print_width: usize = 0;
+
+        make_push_sep!(output, sep_color, self.theme, print_width);
+
+        // let push_sep = |sep: &char| {
+        //     output.push_str(&sep_color.paint(sep.to_string()).to_string());
+        //     print_width += 1;
+        // };
+
         match separator_position {
             SeparatorPosition::Top => {
-                // [..8]
                 for column in self.column_widths.iter().enumerate() {
+                    if column.1 + print_width + 5 > termwidth {
+                        break;
+                    }
+
                     if column.0 == 0 && self.theme.print_left_border {
-                        output.push_str(
-                            &sep_color
-                                .paint(&self.theme.top_left.to_string())
-                                .to_string(),
-                        );
+                        // TODO borrow?
+                        push_sep!(top_left);
+                        // push_sep!(self.theme.top_left);
+                        // output.push_str(
+                        //     &sep_color
+                        //         .paint(&self.theme.top_left.to_string())
+                        //         .to_string(),
+                        // );
                     }
 
-                    for _ in 0..*column.1 {
-                        output.push_str(
-                            &sep_color
-                                .paint(&self.theme.top_horizontal.to_string())
-                                .to_string(),
-                        );
+                    for _ in 0..*column.1 + 2 {
+                        push_sep!(top_horizontal);
+                        // push_sep!(self.theme.top_horizontal);
+                        // output.push_str(
+                        //     &sep_color
+                        //         .paint(&self.theme.top_horizontal.to_string())
+                        //         .to_string(),
+                        // );
                     }
 
-                    output.push_str(
-                        &sep_color
-                            .paint(&self.theme.top_horizontal.to_string())
-                            .to_string(),
-                    );
-                    output.push_str(
-                        &sep_color
-                            .paint(&self.theme.top_horizontal.to_string())
-                            .to_string(),
-                    );
+                    // output.push_str(
+                    //     &sep_color
+                    //         .paint(&self.theme.top_horizontal.to_string())
+                    //         .to_string(),
+                    // );
+                    // output.push_str(
+                    //     &sep_color
+                    //         .paint(&self.theme.top_horizontal.to_string())
+                    //         .to_string(),
+                    // );
                     if column.0 == column_count - 1 {
                         if self.theme.print_right_border {
-                            output.push_str(
-                                &sep_color
-                                    .paint(&self.theme.top_right.to_string())
-                                    .to_string(),
-                            );
+                            push_sep!(top_right);
+                            // push_sep!(self.theme.top_right);
+                            // output.push_str(
+                            //     &sep_color
+                            //         .paint(&self.theme.top_right.to_string())
+                            //         .to_string(),
+                            // );
                         }
                     } else {
-                        output.push_str(
-                            &sep_color
-                                .paint(&self.theme.top_center.to_string())
-                                .to_string(),
-                        );
+                        push_sep!(top_center);
+                        // push_sep!(self.theme.top_center);
+                        // output.push_str(
+                        //     &sep_color
+                        //         .paint(&self.theme.top_center.to_string())
+                        //         .to_string(),
+                        // );
                     }
                 }
             }
@@ -694,43 +728,47 @@ impl WrappedTable {
             SeparatorPosition::Middle => {
                 for column in self.column_widths.iter().enumerate() {
                     if column.0 == 0 && self.theme.print_left_border {
-                        output.push_str(
-                            &sep_color
-                                .paint(&self.theme.middle_left.to_string())
-                                .to_string(),
-                        );
+                        push_sep!(middle_left);
+                        // output.push_str(
+                        //     &sep_color
+                        //         .paint(&self.theme.middle_left.to_string())
+                        //         .to_string(),
+                        // );
                     }
 
-                    for _ in 0..*column.1 {
-                        output.push_str(
-                            &sep_color
-                                .paint(&self.theme.middle_horizontal.to_string())
-                                .to_string(),
-                        );
+                    for _ in 0..*column.1 + 2 {
+                        push_sep!(middle_horizontal);
+                        // output.push_str(
+                        //     &sep_color
+                        //         .paint(&self.theme.middle_horizontal.to_string())
+                        //         .to_string(),
+                        // );
                     }
 
-                    output.push_str(
-                        &sep_color
-                            .paint(&self.theme.middle_horizontal.to_string())
-                            .to_string(),
-                    );
-                    output.push_str(
-                        &sep_color
-                            .paint(&self.theme.middle_horizontal.to_string())
-                            .to_string(),
-                    );
+                    // output.push_str(
+                    //     &sep_color
+                    //         .paint(&self.theme.middle_horizontal.to_string())
+                    //         .to_string(),
+                    // );
+                    // output.push_str(
+                    //     &sep_color
+                    //         .paint(&self.theme.middle_horizontal.to_string())
+                    //         .to_string(),
+                    // );
 
                     if column.0 == column_count - 1 {
                         if self.theme.print_right_border {
-                            output.push_str(
-                                &sep_color
-                                    .paint(&self.theme.middle_right.to_string())
-                                    .to_string(),
-                            );
+                            push_sep!(middle_right);
+                            // output.push_str(
+                            //     &sep_color
+                            //         .paint(&self.theme.middle_right.to_string())
+                            //         .to_string(),
+                            // );
                         }
                     } else {
-                        output
-                            .push_str(&sep_color.paint(&self.theme.center.to_string()).to_string());
+                        push_sep!(center);
+                        // output
+                        //     .push_str(&sep_color.paint(&self.theme.center.to_string()).to_string());
                     }
                 }
             }
@@ -738,44 +776,48 @@ impl WrappedTable {
             SeparatorPosition::Bottom => {
                 for column in self.column_widths.iter().enumerate() {
                     if column.0 == 0 && self.theme.print_left_border {
-                        output.push_str(
-                            &sep_color
-                                .paint(&self.theme.bottom_left.to_string())
-                                .to_string(),
-                        );
+                        push_sep!(bottom_left);
+                        // output.push_str(
+                        //     &sep_color
+                        //         .paint(&self.theme.bottom_left.to_string())
+                        //         .to_string(),
+                        // );
                     }
-                    for _ in 0..*column.1 {
-                        output.push_str(
-                            &sep_color
-                                .paint(&self.theme.bottom_horizontal.to_string())
-                                .to_string(),
-                        );
+                    for _ in 0..*column.1 + 2 {
+                        push_sep!(bottom_horizontal);
+                        // output.push_str(
+                        //     &sep_color
+                        //         .paint(&self.theme.bottom_horizontal.to_string())
+                        //         .to_string(),
+                        // );
                     }
-                    output.push_str(
-                        &sep_color
-                            .paint(&self.theme.bottom_horizontal.to_string())
-                            .to_string(),
-                    );
-                    output.push_str(
-                        &sep_color
-                            .paint(&self.theme.bottom_horizontal.to_string())
-                            .to_string(),
-                    );
+                    // output.push_str(
+                    //     &sep_color
+                    //         .paint(&self.theme.bottom_horizontal.to_string())
+                    //         .to_string(),
+                    // );
+                    // output.push_str(
+                    //     &sep_color
+                    //         .paint(&self.theme.bottom_horizontal.to_string())
+                    //         .to_string(),
+                    // );
 
                     if column.0 == column_count - 1 {
                         if self.theme.print_right_border {
-                            output.push_str(
-                                &sep_color
-                                    .paint(&self.theme.bottom_right.to_string())
-                                    .to_string(),
-                            );
+                            push_sep!(bottom_right);
+                            // output.push_str(
+                            //     &sep_color
+                            //         .paint(&self.theme.bottom_right.to_string())
+                            //         .to_string(),
+                            // );
                         }
                     } else {
-                        output.push_str(
-                            &sep_color
-                                .paint(&self.theme.bottom_center.to_string())
-                                .to_string(),
-                        );
+                        push_sep!(bottom_center);
+                        // output.push_str(
+                        //     &sep_color
+                        //         .paint(&self.theme.bottom_center.to_string())
+                        //         .to_string(),
+                        // );
                     }
                 }
             }
@@ -784,7 +826,12 @@ impl WrappedTable {
         println!("{}", output);
     }
 
-    fn print_cell_contents(&self, cells: &[WrappedCell], color_hm: &HashMap<String, Style>) {
+    fn print_cell_contents(
+        &self,
+        cells: &[WrappedCell],
+        termwidth: usize,
+        color_hm: &HashMap<String, Style>,
+    ) {
         let sep_color = color_hm
             .get("separator_color")
             .unwrap_or(&Style::default())
@@ -792,14 +839,18 @@ impl WrappedTable {
 
         for current_line in 0.. {
             let mut lines_printed = 0;
-
             let mut output = String::new();
+            let mut print_width = 0; // TODO usize?
+
+            make_push_sep!(output, sep_color, self.theme, print_width);
+
             if self.theme.print_left_border {
-                output.push_str(
-                    &sep_color
-                        .paint(&self.theme.left_vertical.to_string())
-                        .to_string(),
-                );
+                // output.push_str(
+                //     &sep_color
+                //         .paint(&self.theme.left_vertical.to_string())
+                //         .to_string(),
+                // );
+                push_sep!(left_vertical);
             }
 
             for column in cells.iter().enumerate() {
@@ -871,7 +922,7 @@ impl WrappedTable {
         }
     }
 
-    fn print_table(&self, color_hm: &HashMap<String, Style>) {
+    fn print_table(&self, termwidth: usize, color_hm: &HashMap<String, Style>) {
         #[cfg(windows)]
         {
             let _ = ansi_term::enable_ansi_support();
@@ -882,7 +933,7 @@ impl WrappedTable {
         }
 
         if self.theme.print_top_border {
-            self.print_separator(SeparatorPosition::Top, &color_hm);
+            self.print_separator(SeparatorPosition::Top, termwidth, &color_hm);
         }
 
         let skip_headers = (self.headers.len() == 2 && self.headers[1].max_width == 0)
@@ -890,7 +941,7 @@ impl WrappedTable {
 
         // [..8]
         if !self.headers.is_empty() && !skip_headers {
-            self.print_cell_contents(&self.headers, &color_hm);
+            self.print_cell_contents(&self.headers, termwidth, &color_hm);
         }
 
         let mut first_row = true;
@@ -898,22 +949,22 @@ impl WrappedTable {
         for row in &self.data {
             if !first_row {
                 if self.theme.separate_rows {
-                    self.print_separator(SeparatorPosition::Middle, &color_hm);
+                    self.print_separator(SeparatorPosition::Middle, termwidth, &color_hm);
                 }
             } else {
                 first_row = false;
 
                 if self.theme.separate_header && !self.headers.is_empty() && !skip_headers {
-                    self.print_separator(SeparatorPosition::Middle, &color_hm);
+                    self.print_separator(SeparatorPosition::Middle, termwidth, &color_hm);
                 }
             }
 
             // [..8]
-            self.print_cell_contents(&row, &color_hm);
+            self.print_cell_contents(&row, termwidth, &color_hm);
         }
 
         if self.theme.print_bottom_border {
-            self.print_separator(SeparatorPosition::Bottom, &color_hm);
+            self.print_separator(SeparatorPosition::Bottom, termwidth, &color_hm);
         }
     }
 }
@@ -992,7 +1043,7 @@ pub fn draw_table(table: &Table, termwidth: usize, color_hm: &HashMap<String, St
     // TODO check
     let max_total: usize = max_per_column.iter().sum::<usize>() + sep_total;
 
-    let view_width = if max_total < termwidth {
+    let view_width = if max_total < 2 * termwidth {
         termwidth
     // TODO tune heuristic
     } else if max_total < 6 * termwidth {
@@ -1014,12 +1065,14 @@ pub fn draw_table(table: &Table, termwidth: usize, color_hm: &HashMap<String, St
     };
 
     // Measure how big our columns need to be (accounting for separators also)
-    let max_naive_column_width = (termwidth - sep_total) / headers_len;
+    // let max_naive_column_width = (termwidth - sep_total) / headers_len;
+    let max_naive_column_width = (view_width - sep_total) / headers_len;
 
     let column_space = ColumnSpace::measure(&max_per_column, max_naive_column_width, headers_len);
 
     // This gives us the max column width
-    let max_column_width = column_space.max_width(termwidth);
+    // let max_column_width = column_space.max_width(termwidth);
+    let max_column_width = column_space.max_width(view_width);
 
     // This width isn't quite right, as we're rounding off some of our space
     let column_space = column_space.fix_almost_column_width(
@@ -1032,19 +1085,23 @@ pub fn draw_table(table: &Table, termwidth: usize, color_hm: &HashMap<String, St
     println!("{:#?}", column_space);
 
     // This should give us the final max column width
-    let max_column_width = column_space.max_width(termwidth);
+    // let max_column_width = column_space.max_width(termwidth);
+    let max_column_width = column_space.max_width(view_width);
 
     println!("max width {:?}", max_column_width);
-
     // println!("processed table {:#?}", processed_table);
 
     let wrapped_table = wrap_cells(processed_table, max_column_width, &color_hm);
 
-    // println!("wrapped table {:#?}", wrapped_table);
-
-    wrapped_table.print_table(&color_hm);
+    // if view_width == termwidth {
+    // TODO really pass in termwidth or resolve earlier?
+    wrapped_table.print_table(termwidth, &color_hm);
+    // } else {
+    //     wrapped_table.print_collapsed(&color_hm)
+    // }
 }
 
+// TODO maybe WrappedTable should know termwidth, etc?
 fn wrap_cells(
     processed_table: ProcessedTable,
     max_column_width: usize,
