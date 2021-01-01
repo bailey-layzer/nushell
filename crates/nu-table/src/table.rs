@@ -657,6 +657,7 @@ impl WrappedTable {
             //     col_width += 1;
             // }
             if width + col_width > max_width {
+                println!("exceeded {} with {} {}", max_width, width, col_width);
                 ellipsis_col = Some(i);
                 break;
             } else {
@@ -679,7 +680,7 @@ impl WrappedTable {
 
                 let mut headers: Vec<WrappedCell> =
                     self.headers[0..ellipsis_col].iter().cloned().collect();
-                let line = format!("({} cols)", ncols - ellipsis_col);
+                let line = format!("({} cols)", ncols - ellipsis_col - 1);
                 let max_width = line.len();
                 headers.push(WrappedCell {
                     lines: vec![WrappedLine {
@@ -700,8 +701,8 @@ impl WrappedTable {
                         let mut trimmed = row[0..ellipsis_col].iter().cloned().collect::<Vec<_>>();
                         trimmed.push(WrappedCell {
                             lines: vec![WrappedLine {
-                                line: String::from("  ...  "),
-                                width: 7,
+                                line: ".".repeat(max_width),
+                                width: max_width,
                             }],
                             max_width,
                             style: self.data[0][ellipsis_col].style,
@@ -1095,17 +1096,23 @@ pub fn draw_table(table: &Table, termwidth: usize, color_hm: &HashMap<String, St
         headers_len
     };
 
-    let sep_total = 3 * (headers_len - 1);
-    let max_total: usize = max_per_column.iter().sum::<usize>() + sep_total; // TODO check
+    // TODO left/right border if theme
+    let sep_total = 3 * (headers_len - 1) + 6 + 1; // TODO for index col, right space
 
-    let view_width = if max_total < termwidth {
+    let max_total: usize = max_per_column.iter().sum::<usize>() + sep_total;
+
+    println!("termwidth: {}\nmax_total: {}", termwidth, max_total);
+
+    // TODO: make sure 'help commands' does not collapse
+    let view_width = if max_total < 2 * termwidth {
         termwidth
     // TODO tune heuristic
-    } else if max_total < 6 * termwidth {
+    } else if max_total < 4 * termwidth {
         // max_total / 2
         2 * termwidth
     } else {
-        max_total / 2
+        // TODO just use header widths
+        max_total
         //     println!("DANGER ZONE {:?}", max_total);
         //     return;
     };
@@ -1127,19 +1134,18 @@ pub fn draw_table(table: &Table, termwidth: usize, color_hm: &HashMap<String, St
         headers_len,
     );
 
-    println!("{:#?}", column_space);
-
     // This should give us the final max column width
     let max_column_width = column_space.max_width(view_width);
 
-    println!("max width {:?}", max_column_width);
-
-    // println!("processed table {:#?}", processed_table);
-
-    let wrapped_table =
-        wrap_cells(processed_table, max_column_width, &color_hm).collapse_width(termwidth);
-
-    // println!("wrapped table {:#?}", wrapped_table);
+    let wrapped_table = {
+        let wt = wrap_cells(processed_table, max_column_width, &color_hm);
+        if view_width == termwidth {
+            // TODO clumsy?
+            wt
+        } else {
+            wt.collapse_width(termwidth)
+        }
+    };
 
     wrapped_table.print_table(&color_hm);
 }
