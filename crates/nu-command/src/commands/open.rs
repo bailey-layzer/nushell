@@ -2,13 +2,14 @@ use crate::commands::constants::BAT_LANGUAGES;
 use crate::prelude::*;
 use encoding_rs::{Encoding, UTF_8};
 use futures_util::StreamExt;
-use hdf5::types::{Array, FixedAscii, TypeDescriptor, VarLenAscii};
+use hdf5::types::{Array, FixedAscii, TypeDescriptor, VarLenArray, VarLenAscii};
 use log::debug;
 use nu_engine::StringOrBinary;
 use nu_engine::WholeStreamCommand;
 use nu_errors::ShellError;
 use nu_protocol::{
-    CommandAction, ReturnSuccess, Signature, SyntaxShape, TaggedDictBuilder, UntaggedValue, Value,
+    CommandAction, Primitive, ReturnSuccess, Signature, SyntaxShape, TaggedDictBuilder,
+    UntaggedValue, Value,
 };
 use nu_source::{AnchorLocation, Span, Tagged};
 use regex::Regex;
@@ -100,11 +101,13 @@ pub fn get_encoding(opt: Option<Tagged<String>>) -> Result<&'static Encoding, Sh
 fn read_hdf5(path: Tagged<PathBuf>) -> Result<OutputStream, ShellError> {
     return match hdf5::File::open(path.as_path()) {
         Ok(file) => {
+            // TODO anything with plist? how to get encoding (not here)?
             // println!("{:#?}", file.access_plist().unwrap().properties());
 
             // TODO what happens to error?
             // dereferencing a File makes a Group
-            Ok(futures::stream::iter(read_group(&*file)).to_output_stream())
+            Ok(OutputStream::one(ReturnSuccess::value(read_group(&*file)?)))
+
             // for name in file
             //     .clone() // TODO
             //     .member_names()
@@ -131,24 +134,18 @@ fn read_hdf5(path: Tagged<PathBuf>) -> Result<OutputStream, ShellError> {
     // println!("{:?}", file.member_names());
 }
 
-fn read_child(group: hdf5::Group) {}
-
-// #[derive(Debug, hdf5::H5Type)]
-// #[repr(C)]
-// struct AsciiAxis {
-//     contents: &'static str,
-// }
-
 fn read_group(group: &hdf5::Group) -> Result<Value, ShellError> {
     let members = group.member_names().map_err(|e| {
         ShellError::untagged_runtime_error(format!("problem reading HDF file: {:?}", e))
     })?;
+
+    println!("{:#?}", members);
     // TODO handle only one dataset differently?
 
     // TODO with_capacity?
     let mut dict = TaggedDictBuilder::new(Tag::unknown()); // TODO is it known?
 
-    let re_axis = Regex::new(r"axis(\d)(?:_(label|level)(\d))?").expect("regex should compile");
+    let re_axis = Regex::new(r"axis(\d)(?:_(label|level)(\d))?").expect("literal regex");
 
     let mut datasets: Vec<String> = Vec::new();
     for name in members {
@@ -158,43 +155,137 @@ fn read_group(group: &hdf5::Group) -> Result<Value, ShellError> {
         }
     }
 
-    let mut axes: Vec<String> = Vec::new();
+    // TODO size?
+    let mut axes: IndexMap<usize, Vec<Value>> = IndexMap::new();
     let mut blocks: Vec<String> = Vec::new();
+
     for name in datasets {
-        let axis = match re_axis.captures(&name) {
-            None => {
-                blocks.push(name);
-                continue;
-            }
-            Some(captures) => {
-                match captures.get(2).map(|m| m.as_str()) {
-                    None => match captures.get(1).map(|m| m.as_str()) {
-                        Some("0") => {
-                            // read_fixed_ascii(
-                            //     group.dataset(&name).expect("TODO should be dataset?"),
-                            //     16, // TODO need to actually extract
-                            // )
-                            read_dataset(group.dataset(&name).expect("TODO should be dataset?"))
-                                .map(|val| val.as_string())
+        if let Some(captures) = re_axis.captures(&name) {
+            match captures.get(2).map(|m| m.as_str()) {
+                None => {
+                    if let Some(capture) = captures.get(1) {
+                        let n = str::parse::<usize>(capture.as_str())
+                            .map_err(|_| ShellError::unimplemented("TODO parsing string axis"))?;
+                        if let Ok(Value {
+                            value: UntaggedValue::Table(values),
+                            ..
+                        }) = read_dataset(
+                            // TODO silly to bundle it up only to pull it back out?
+                            // TODO deal with errors
+                            group.dataset(&name).expect("TODO not a group or dataset?"),
+                        ) {
+                            // TODO don't expect
+                            axes.insert(n, values);
                         }
-                        Some("1") => continue,
-                        _ => panic!("TODO"),
-                    },
-                    Some("label") => continue, // TODO are these needed?
-                    Some("level") => continue, // TODO read_fixed_ascii(dataset),
-                    _ => {
-                        panic!("TODO")
-                    } // return Err(ShellError::unimplemented(format ! ("axis label {}", name)));
+                    }
+                    // axes.insert()
+                    // match .map(|m| ) {
+                    //
+                    //
+                    //         Some("0") => {
+                    //     // read_fixed_ascii(
+                    //     //     group.dataset(&name).expect("TODO should be dataset?"),
+                    //     //     16, // TODO need to actually extract
+                    //     // )
+                    //     if let Ok(val) = read_dataset(
+                    //     // TODO deal with errors
+                    //     group.dataset(&name).expect("TODO not a group or dataset?"),
+                    //     ) {
+                    //     dict.insert_value(name, val);
+                    //     }
+                    //     }
+                    //     Some("1") => {
+                    //         println!("ignoring axis1");
+                    //         continue;
+                    //     }
+                    //     _ => panic!("TODO"),
+                    // }
                 }
+                Some("label") => {
+                    println!("ignoring label");
+                    continue;
+                } // TODO are these needed?
+                Some("level") => {
+                    println!("ignoring level");
+                    continue;
+                } // TODO read_fixed_ascii(dataset),
+                _ => {
+                    panic!("TODO")
+                } // return Err(ShellError::unimplemented(format ! ("axis label {}", name)));
             }
-        };
+
+            continue;
+        }
+
+        blocks.push(name);
     }
 
+    let re_block = Regex::new(r"block(\d)_(items|values)").expect("literal regex");
+
     for name in blocks {
-        if let Ok(val) = read_dataset(group.dataset(&name).expect("TODO not a group or dataset?")) {
-            dict.insert_value(name, val);
+        match re_block.captures(&name) {
+            None => (), // TODO
+            Some(captures) => match captures.get(2).map(|m| m.as_str()) {
+                None => (),
+                Some("items") => {
+                    if let Ok(Value {
+                        // TODO more assert-like, repetition
+                        value: UntaggedValue::Table(vals),
+                        ..
+                    }) =
+                        read_dataset(group.dataset(&name).expect("TODO not a group or dataset?"))
+                    {
+                    }
+                }
+                Some("values") => {
+                    if let Ok(Value {
+                        // TODO more assert-like
+                        value: UntaggedValue::Table(vals),
+                        ..
+                    }) =
+                        read_dataset(group.dataset(&name).expect("TODO not a group or dataset?"))
+                    {
+                        // TODO if int headers, may have to convert them for Nu
+                        let headers = axes
+                            .get(&0)
+                            .unwrap()
+                            .iter()
+                            .map(|v| v.value.expect_string().to_owned())
+                            .collect();
+                        let values = vals
+                            .into_iter()
+                            .filter_map(|v| {
+                                if let Value {
+                                    value: UntaggedValue::Row(dict),
+                                    ..
+                                } = v
+                                {
+                                    // TODO cloned here? later?
+                                    Some(dict.values().cloned().collect::<Vec<_>>())
+                                } else {
+                                    None // TODO?
+                                }
+                            })
+                            .collect();
+
+                        // dict.insert_value(name, consolidate_block(headers, values))
+                        return Ok(consolidate_block(headers, values));
+                    }
+                }
+                Some(other) => panic!("TODO {}", other),
+            },
         }
+
+        // // TODO just blocks?
+        // // TODO deal with errors
+        // if let Ok(val) = read_dataset(group.dataset(&name).expect("TODO not a group or dataset?")) {
+        //     dict.insert_value(name, val);
+        // }
     }
+
+    // for (i, val) in axes.into_iter() {
+    //     dict.insert_value(i.to_string(), val);
+    // }
 
     // TODO return/add to builder as untagged value instead??
     Ok(dict.into_value())
@@ -210,6 +301,22 @@ fn read_group(group: &hdf5::Group) -> Result<Value, ShellError> {
     // )
     // .into_untagged_value())
 }
+
+// TODO make it all async?
+fn consolidate_block(headers: Vec<String>, values: Vec<Vec<Value>>) -> Value {
+    UntaggedValue::Table(
+        values
+            .into_iter()
+            .map(|row| {
+                UntaggedValue::row(
+                    headers.iter().cloned().zip(row.into_iter()).collect(), //::<IndexMap<_, _>>(),
+                )
+                .into_untagged_value()
+            })
+            .collect(),
+    )
+    .into_untagged_value() // TODO tag?
+} //
 
 // fn read_fixed_ascii(dataset: hdf5::Dataset, size: usize) -> Result<Vec<String>, ShellError> {
 //     // TODO break points
@@ -239,15 +346,15 @@ fn read_group(group: &hdf5::Group) -> Result<Value, ShellError> {
 // }
 
 fn read_dataset(dataset: hdf5::Dataset) -> Result<Value, ShellError> {
-    println!("SHAPE {:?}", dataset.shape());
+    // println!("SHAPE {:?}", dataset.shape());
     let dtype = dataset.dtype().unwrap();
-    println!("TYPE {:?}", dtype.to_descriptor());
+    // println!("TYPE {:?}", dtype.to_descriptor());
 
     Ok(UntaggedValue::Table(match dtype.to_descriptor().unwrap() {
         // TODO see issue with h5ex_t_vlstringatt.h5
         TypeDescriptor::Integer(_) => {
             // println!("READ {:?}", dataset.read_2d::<i64>());
-            // TODO assumes 2d
+            // TODO assumes 2d?
             dataset
                 .read_dyn::<i64>()
                 .unwrap()
@@ -306,24 +413,47 @@ fn read_dataset(dataset: hdf5::Dataset) -> Result<Value, ShellError> {
 
             // return Err(ShellError::unimplemented(""));
         }
-        _ => return Err(ShellError::unimplemented("")),
-        // TypeDescriptor::Unsigned(_) => {
-        //     // TODO care about smaller ints?
-        //     let data = dataset.read_2d::<u64>();
-        //     println!("READ {:?}", data);
-        // }
-        // TypeDescriptor::Float(_) => {
-        //     let data = dataset.read_raw::<f64>();
-        // }
-        // TypeDescriptor::Boolean => {}
-        // TypeDescriptor::Enum(_) => {}
-        // TypeDescriptor::Compound(_) => {}
-        // TypeDescriptor::FixedArray(_, _) => {}
+        TypeDescriptor::VarLenArray(td) => {
+            match *td {
+                TypeDescriptor::Unsigned(size) => {
+                    // TODO could use size?
+                    let val: Vec<_> = dataset
+                        .as_reader()
+                        .read_raw::<VarLenArray<u8>>()
+                        .unwrap()
+                        .iter()
+                        // .map(|vla| )
+                        // .flatten() // TODO what happens with > 1 col
+                        .map(|arr| serde_pickle::de::value_from_slice(&arr.to_vec()))
+                        // TODO gives shape and values
+                        // .map_err(|_| ShellError::unimplemented("TODO some serde malarkey")?
+                        .collect();
+                    println!("varlen unsigned: {:#?}", val);
+                }
+                _ => (),
+            }
 
-        // TypeDescriptor::FixedUnicode(_) => {}
-        // TypeDescriptor::VarLenArray(_) => {}
-        // TypeDescriptor::VarLenAscii => {}
-        // TypeDescriptor::VarLenUnicode => {}
+            return Err(ShellError::unimplemented("TODO"));
+        }
+        other => {
+            println!("ignoring {:#?}", other);
+            return Err(ShellError::unimplemented("TODO"));
+        } // TypeDescriptor::Unsigned(_) => {
+          //     // TODO care about smaller ints?
+          //     let data = dataset.read_2d::<u64>();
+          //     println!("READ {:?}", data);
+          // }
+          // TypeDescriptor::Float(_) => {
+          //     let data = dataset.read_raw::<f64>();
+          // }
+          // TypeDescriptor::Boolean => {}
+          // TypeDescriptor::Enum(_) => {}
+          // TypeDescriptor::Compound(_) => {}
+          // TypeDescriptor::FixedArray(_, _) => {}
+
+          // TypeDescriptor::FixedUnicode(_) => {}
+          // TypeDescriptor::VarLenAscii => {}
+          // TypeDescriptor::VarLenUnicode => {}
     })
     .into_untagged_value())
 }
