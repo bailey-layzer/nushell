@@ -4,7 +4,7 @@ use nu_protocol::{
     CallInfo, Primitive, ReturnSuccess, ReturnValue, Signature, SyntaxShape, TaggedDictBuilder,
     UntaggedValue, Value,
 };
-use nu_source::{Tag, Tagged};
+use nu_source::{Span, Tag, Tagged};
 
 use hdf5::types::{Array, FixedAscii, TypeDescriptor, VarLenArray, VarLenAscii};
 use hdf5_sys::h5e::{H5Eset_auto2, H5E_DEFAULT};
@@ -30,63 +30,50 @@ pub(crate) async fn read_hdf(path: Tagged<PathBuf>) -> ReturnValue {
     return match hdf5::File::open(path.as_path()) {
         Ok(file) => {
             // TODO anything with plist? how to get encoding (not here)?
-            // println!("{:#?}", file.access_plist().unwrap().properties());
+            // eprintln!("{:#?}", file.access_plist().unwrap().properties());
 
             // TODO what happens to error?
             // dereferencing a File makes a Group
-            ReturnSuccess::value(read_group(&*file)?)
-
-            // for name in file
-            //     .clone() // TODO
-            //     .member_names()
-            //     .map_err(|_| ShellError::unimplemented(""))?
-            // {
-            //     // for name in vec!["axis0"] {
-            //     println!("==== {:?} =====", name);
-            //     println!("{:#?}", file.dataset(&name));
-            //     let group = file
-            //         .group(&name)
-            //         .map_err(|_| ShellError::unimplemented(""))?;
-            //     // TODO top level can be a dataset?
-            //     read_group(group);
-            // }
+            ReturnSuccess::value(read_group(&*file)?.into_value(path.tag))
+            // TODO correct tag usage?
 
             // return Ok(OutputStream::empty());
         }
         Err(e) => Err(ShellError::labeled_error(
-            "Cannot open file as HDF5",
-            "TODO",
+            format!("Cannot open file as HDF5: {:?}", e),
+            "error opening file",
             path.tag.clone(),
         )),
     };
 }
 
-fn read_group(group: &hdf5::Group) -> Result<Value, ShellError> {
+fn read_group(group: &hdf5::Group) -> Result<UntaggedValue, ShellError> {
     let members = group.member_names().map_err(|e| {
-        ShellError::untagged_runtime_error(format!("problem reading HDF file: {:?}", e))
+        // TODO error phrasing
+        ShellError::untagged_runtime_error(format!("Problem reading HDF members: {:?}", e))
     })?;
 
-    // println!("{:#?}", members);
-    // TODO handle only one dataset differently?
+    // TODO handle singleton dataset differently?
 
-    // TODO with_capacity?
-    let mut dict = TaggedDictBuilder::new(Tag::unknown()); // TODO is it known?
+    // TODO should the tag be the file path??
+    let mut dict = TaggedDictBuilder::new(Tag::unknown());
     let mut datasets: Vec<String> = Vec::new();
     let re_axis = Regex::new(r"axis(\d)(?:_(label|level)(\d))?").expect("literal regex");
 
     unsafe {
-        // turns off unwanted output to stderr by hdf5 C library
+        // turn off unwanted output to stderr by hdf5 C library when calling .group below
         H5Eset_auto2(H5E_DEFAULT, None, std::ptr::null_mut());
     }
 
     for name in members {
         match group.group(&name) {
-            Ok(group) => dict.insert_value(name, read_group(&group)?), // TODO ? appropriate?
+            // TODO need to tag recursive tables??
+            // TODO different handling of recursive error?
+            Ok(group) => dict.insert_value(name, read_group(&group)?),
             Err(_) => datasets.push(name),
         }
     }
 
-    // TODO size?
     let mut axes: IndexMap<usize, Vec<Value>> = IndexMap::new();
     let mut blocks: Vec<String> = Vec::new();
 
@@ -107,30 +94,9 @@ fn read_group(group: &hdf5::Group) -> Result<Value, ShellError> {
                         ) {
                             // TODO don't expect
                             axes.insert(n, values);
+                            // eprintln!("{:#?}", axes.get(&n));
                         }
                     }
-                    // axes.insert()
-                    // match .map(|m| ) {
-                    //
-                    //
-                    //         Some("0") => {
-                    //     // read_fixed_ascii(
-                    //     //     group.dataset(&name).expect("TODO should be dataset?"),
-                    //     //     16, // TODO need to actually extract
-                    //     // )
-                    //     if let Ok(val) = read_dataset(
-                    //     // TODO deal with errors
-                    //     group.dataset(&name).expect("TODO not a group or dataset?"),
-                    //     ) {
-                    //     dict.insert_value(name, val);
-                    //     }
-                    //     }
-                    //     Some("1") => {
-                    //         println!("ignoring axis1");
-                    //         continue;
-                    //     }
-                    //     _ => panic!("TODO"),
-                    // }
                 }
                 Some("label") => {
                     // println!("ignoring label");
@@ -181,12 +147,13 @@ fn read_group(group: &hdf5::Group) -> Result<Value, ShellError> {
                             .get(&0)
                             .unwrap()
                             .iter()
-                            .map(|v| v.value.expect_string().to_owned())
+                            .map(|v| v.convert_to_string())
                             .collect();
                         let values = vals
                             .into_iter()
                             .filter_map(|v| {
                                 if let Value {
+                                    // TODO this is now standardized to table
                                     value: UntaggedValue::Row(dict),
                                     ..
                                 } = v
@@ -218,10 +185,8 @@ fn read_group(group: &hdf5::Group) -> Result<Value, ShellError> {
     //     dict.insert_value(i.to_string(), val);
     // }
 
-    // println!("{:#?}", dict);
-
     // TODO return/add to builder as untagged value instead??
-    Ok(dict.into_value())
+    Ok(dict.into_untagged_value())
 
     // .iter()
     // .filter_map(|name| {
@@ -236,7 +201,7 @@ fn read_group(group: &hdf5::Group) -> Result<Value, ShellError> {
 }
 
 // TODO make it all async?
-fn consolidate_block(headers: Vec<String>, values: Vec<Vec<Value>>) -> Value {
+fn consolidate_block(headers: Vec<String>, values: Vec<Vec<Value>>) -> UntaggedValue {
     UntaggedValue::Table(
         values
             .into_iter()
@@ -248,100 +213,136 @@ fn consolidate_block(headers: Vec<String>, values: Vec<Vec<Value>>) -> Value {
             })
             .collect(),
     )
-    .into_untagged_value() // TODO tag?
+    // .into_untagged_value() // TODO tag?
 } //
-
-// fn read_fixed_ascii(dataset: hdf5::Dataset, size: usize) -> Result<Vec<String>, ShellError> {
-//     // TODO break points
-//     if size <= 16 {
-//         Ok(dataset
-//             .as_reader()
-//             // TODO problem of fixed length
-//             .read_raw::<FixedAscii<[u8; 16]>>()
-//             .unwrap()
-//             .iter()
-//             .map(|fa| fa.to_string())
-//             // .map(UntaggedValue::string)
-//             .collect())
-//     } else if size <= 64 {
-//         Ok(dataset
-//             .as_reader()
-//             // TODO problem of fixed length
-//             .read_raw::<FixedAscii<[u8; 64]>>()
-//             .unwrap()
-//             .iter()
-//             .map(|fa| fa.to_string())
-//             // .map()
-//             .collect())
-//     } else {
-//         Err(ShellError::unimplemented("big fuckin strings"))
-//     }
-// }
 
 fn read_dataset(dataset: hdf5::Dataset) -> Result<Value, ShellError> {
     // println!("SHAPE {:?}", dataset.shape());
     let dtype = dataset.dtype().unwrap();
     // println!("TYPE {:?}", dtype.to_descriptor());
 
-    Ok(UntaggedValue::Table(match dtype.to_descriptor().unwrap() {
-        // TODO see issue with h5ex_t_vlstringatt.h5
-        TypeDescriptor::Integer(_) => {
-            // println!("READ {:?}", dataset.read_2d::<i64>());
-            // TODO assumes 2d?
+    macro_rules! read_type {
+        ($read_type:ty, $untagged:path) => {
             dataset
-                .read_dyn::<i64>()
+                // TODO does >2d exist?
+                .read_dyn::<$read_type>()
                 .unwrap()
-                // .clone()
                 .outer_iter()
-                // .genrows()
-                // .into_iter()
                 .map(|row| {
-                    UntaggedValue::row(
+                    UntaggedValue::Table(
                         row.iter()
-                            .enumerate()
-                            .map(|(i, val)| {
-                                (
-                                    format!("Column{}", i),
-                                    UntaggedValue::int(*val).into_untagged_value(),
-                                )
-                            })
-                            .collect::<IndexMap<String, Value>>(),
+                            .map(|val| $untagged(*val).into_untagged_value())
+                            .collect::<Vec<_>>(),
+                        // UntaggedValue::row(
+
+                        // .enumerate()
+                        // .map(|(i, val)| {
+                        //     (
+                        //         format!("Column{}", i),
+                        //         $untagged(*val).into_untagged_value(),
+                        //         // UntaggedValue::$untagged(*val).into_untagged_value(),
+                        //     )
+                        // })
+                        // .collect::<IndexMap<String, Value>>(),
                     )
                     .into_untagged_value()
                 })
                 .collect::<Vec<_>>()
+        };
+    }
+
+    Ok(UntaggedValue::Table(match dtype.to_descriptor().unwrap() {
+        // TODO see issue with h5ex_t_vlstringatt.h5
+        TypeDescriptor::Integer(_) => {
+            read_type!(i64, UntaggedValue::int)
+            // dataset
+            //
+            //     .read_dyn::<i64>()
+            //     .unwrap()
+            //     // .clone()
+            //     .outer_iter()
+            //     // .genrows()
+            //     // .into_iter()
+            //     .map(|row| {
+            //         UntaggedValue::row(
+            //             row.iter()
+            //                 .enumerate()
+            //                 .map(|(i, val)| {
+            //                     (
+            //                         // TODO just turn everything into a table and fix later?
+            //                         format!("Column{}", i),
+            //                         UntaggedValue::int(*val).into_untagged_value(),
+            //                     )
+            //                 })
+            //                 .collect::<IndexMap<String, Value>>(),
+            //         )
+            //         .into_untagged_value()
+            //     })
+            //     .collect::<Vec<_>>()
 
             // TODO into_untagged_values a problem?
 
             // Ok(futures::stream::iter(
             //     .to_output_stream());
         }
+
+        TypeDescriptor::Unsigned(_) => {
+            // TODO care about smaller ints?
+            read_type!(u64, UntaggedValue::int)
+            // dataset
+            //     .read_dyn::<u64>()
+            //     .unwrap()
+            //     .outer_iter()
+            //     .map(|row| {
+            //         UntaggedValue::row(
+            //             row.iter()
+            //                 .enumerate()
+            //                 .map(|(i, val)| {
+            //                     (
+            //                         format!("Column{}", i),
+            //                         UntaggedValue::int(*val).into_untagged_value(),
+            //                     )
+            //                 })
+            //                 .collect::<IndexMap<String, Value>>(),
+            //         )
+            //         .into_untagged_value()
+            //     })
+            //     .collect::<Vec<_>>()
+        }
+        TypeDescriptor::Float(_) => {
+            let to_untagged = |f: f64| UntaggedValue::decimal_from_float(f, Span::unknown());
+            read_type!(f64, to_untagged)
+        }
+        TypeDescriptor::Boolean => {
+            read_type!(bool, UntaggedValue::boolean)
+        }
+        // TypeDescriptor::Enum(_) => {}
+        // TypeDescriptor::Compound(_) => {}
+        // TypeDescriptor::FixedArray(_, _) => {}
         TypeDescriptor::FixedAscii(size) => {
             // read_fixed_ascii(dataset, size).map(UntaggedValue::string)
             if size <= 16 {
-                dataset
-                    .as_reader()
-                    // TODO problem of fixed length
-                    .read_raw::<FixedAscii<[u8; 16]>>()
-                    .unwrap()
-                    .iter()
-                    .map(|fa| UntaggedValue::string(fa.to_string()).into_untagged_value())
-                    // .map(UntaggedValue::string)
-                    .collect()
-            // ))
+                read_type!(FixedAscii<[u8; 16]>, UntaggedValue::string)
+            // dataset
+            //     // .as_reader()
+            //     // TODO problem of fixed length
+            //     .read_raw::<FixedAscii<[u8; 16]>>()
+            //     .unwrap()
+            //     .iter()
+            //     .map(|fa| UntaggedValue::string(fa.to_string()).into_untagged_value())
+            //     .collect()
             } else if size <= 64 {
-                dataset
-                    .as_reader()
-                    // TODO problem of fixed length
-                    .read_raw::<FixedAscii<[u8; 64]>>()
-                    .unwrap()
-                    .iter()
-                    .map(|fa| UntaggedValue::string(fa.to_string()).into_untagged_value())
-                    // .map()
-                    .collect()
-            // ))
+                read_type!(FixedAscii<[u8; 64]>, UntaggedValue::string)
+            // dataset
+            //     // .as_reader()
+            //     // TODO problem of fixed length
+            //     .read_raw::<FixedAscii<[u8; 64]>>()
+            //     .unwrap()
+            //     .iter()
+            //     .map(|fa| UntaggedValue::string(fa.to_string()).into_untagged_value())
+            //     .collect()
             } else {
-                return Err(ShellError::unimplemented("big fuckin strings"));
+                return Err(ShellError::unimplemented("TODO big fuckin strings"));
             }
 
             // return Err(ShellError::unimplemented(""));
@@ -355,7 +356,6 @@ fn read_dataset(dataset: hdf5::Dataset) -> Result<Value, ShellError> {
                         .read_raw::<VarLenArray<u8>>()
                         .unwrap()
                         .iter()
-                        // .map(|vla| )
                         // .flatten() // TODO what happens with > 1 col
                         .map(|arr| serde_pickle::de::value_from_slice(&arr.to_vec()))
                         // TODO gives shape and values
@@ -371,20 +371,7 @@ fn read_dataset(dataset: hdf5::Dataset) -> Result<Value, ShellError> {
         other => {
             eprintln!("ignoring {:#?}", other);
             return Err(ShellError::unimplemented("TODO"));
-        } // TypeDescriptor::Unsigned(_) => {
-          //     // TODO care about smaller ints?
-          //     let data = dataset.read_2d::<u64>();
-          //     println!("READ {:?}", data);
-          // }
-          // TypeDescriptor::Float(_) => {
-          //     let data = dataset.read_raw::<f64>();
-          // }
-          // TypeDescriptor::Boolean => {}
-          // TypeDescriptor::Enum(_) => {}
-          // TypeDescriptor::Compound(_) => {}
-          // TypeDescriptor::FixedArray(_, _) => {}
-
-          // TypeDescriptor::FixedUnicode(_) => {}
+        } // TypeDescriptor::FixedUnicode(_) => {}
           // TypeDescriptor::VarLenAscii => {}
           // TypeDescriptor::VarLenUnicode => {}
     })
