@@ -187,17 +187,6 @@ fn read_group(group: &hdf5::Group) -> Result<UntaggedValue, ShellError> {
 
     // TODO return/add to builder as untagged value instead??
     Ok(dict.into_untagged_value())
-
-    // .iter()
-    // .filter_map(|name| {
-    //     (
-    //         name.clone(),
-    //
-    //     )
-    // })
-    // .collect::<IndexMap<String, Value>>(),
-    // )
-    // .into_untagged_value())
 }
 
 // TODO make it all async?
@@ -233,18 +222,9 @@ fn read_dataset(dataset: hdf5::Dataset) -> Result<Value, ShellError> {
                         row.iter()
                             .map(|val| $untagged(*val).into_untagged_value())
                             .collect::<Vec<_>>(),
-                        // UntaggedValue::row(
-
-                        // .enumerate()
-                        // .map(|(i, val)| {
-                        //     (
-                        //         format!("Column{}", i),
-                        //         $untagged(*val).into_untagged_value(),
-                        //         // UntaggedValue::$untagged(*val).into_untagged_value(),
-                        //     )
-                        // })
-                        // .collect::<IndexMap<String, Value>>(),
                     )
+                    // TODO into_untagged_values a problem?
+                    //  (will tagging happen later regardless)
                     .into_untagged_value()
                 })
                 .collect::<Vec<_>>()
@@ -255,59 +235,10 @@ fn read_dataset(dataset: hdf5::Dataset) -> Result<Value, ShellError> {
         // TODO see issue with h5ex_t_vlstringatt.h5
         TypeDescriptor::Integer(_) => {
             read_type!(i64, UntaggedValue::int)
-            // dataset
-            //
-            //     .read_dyn::<i64>()
-            //     .unwrap()
-            //     // .clone()
-            //     .outer_iter()
-            //     // .genrows()
-            //     // .into_iter()
-            //     .map(|row| {
-            //         UntaggedValue::row(
-            //             row.iter()
-            //                 .enumerate()
-            //                 .map(|(i, val)| {
-            //                     (
-            //                         // TODO just turn everything into a table and fix later?
-            //                         format!("Column{}", i),
-            //                         UntaggedValue::int(*val).into_untagged_value(),
-            //                     )
-            //                 })
-            //                 .collect::<IndexMap<String, Value>>(),
-            //         )
-            //         .into_untagged_value()
-            //     })
-            //     .collect::<Vec<_>>()
-
-            // TODO into_untagged_values a problem?
-
-            // Ok(futures::stream::iter(
-            //     .to_output_stream());
         }
-
         TypeDescriptor::Unsigned(_) => {
             // TODO care about smaller ints?
             read_type!(u64, UntaggedValue::int)
-            // dataset
-            //     .read_dyn::<u64>()
-            //     .unwrap()
-            //     .outer_iter()
-            //     .map(|row| {
-            //         UntaggedValue::row(
-            //             row.iter()
-            //                 .enumerate()
-            //                 .map(|(i, val)| {
-            //                     (
-            //                         format!("Column{}", i),
-            //                         UntaggedValue::int(*val).into_untagged_value(),
-            //                     )
-            //                 })
-            //                 .collect::<IndexMap<String, Value>>(),
-            //         )
-            //         .into_untagged_value()
-            //     })
-            //     .collect::<Vec<_>>()
         }
         TypeDescriptor::Float(_) => {
             let to_untagged = |f: f64| UntaggedValue::decimal_from_float(f, Span::unknown());
@@ -323,24 +254,8 @@ fn read_dataset(dataset: hdf5::Dataset) -> Result<Value, ShellError> {
             // read_fixed_ascii(dataset, size).map(UntaggedValue::string)
             if size <= 16 {
                 read_type!(FixedAscii<[u8; 16]>, UntaggedValue::string)
-            // dataset
-            //     // .as_reader()
-            //     // TODO problem of fixed length
-            //     .read_raw::<FixedAscii<[u8; 16]>>()
-            //     .unwrap()
-            //     .iter()
-            //     .map(|fa| UntaggedValue::string(fa.to_string()).into_untagged_value())
-            //     .collect()
             } else if size <= 64 {
                 read_type!(FixedAscii<[u8; 64]>, UntaggedValue::string)
-            // dataset
-            //     // .as_reader()
-            //     // TODO problem of fixed length
-            //     .read_raw::<FixedAscii<[u8; 64]>>()
-            //     .unwrap()
-            //     .iter()
-            //     .map(|fa| UntaggedValue::string(fa.to_string()).into_untagged_value())
-            //     .collect()
             } else {
                 return Err(ShellError::unimplemented("TODO big fuckin strings"));
             }
