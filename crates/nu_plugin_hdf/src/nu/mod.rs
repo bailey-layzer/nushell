@@ -13,7 +13,7 @@ impl Plugin for Hdf {
     fn config(&mut self) -> Result<Signature, ShellError> {
         Ok(Signature::build("hdf")
             .desc("Open HDF5 file")
-            .required("path", SyntaxShape::Path, "file path to open")
+            .required("path", SyntaxShape::FilePath, "file path to open")
             .filter())
     }
 
@@ -21,7 +21,7 @@ impl Plugin for Hdf {
         if let Some(args) = callinfo.args.positional {
             if let Value {
                 // TODO needed, yes?
-                value: UntaggedValue::Primitive(Primitive::Path(pathbuf)),
+                value: UntaggedValue::Primitive(Primitive::FilePath(pathbuf)),
                 tag,
             } = &args[0]
             {
