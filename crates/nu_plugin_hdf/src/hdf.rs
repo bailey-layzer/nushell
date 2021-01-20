@@ -27,6 +27,11 @@ impl Hdf {
 }
 
 pub(crate) async fn read_hdf(path: Tagged<PathBuf>) -> ReturnValue {
+    unsafe {
+        // turn off unwanted output to stderr by hdf5 C library should file not exist
+        H5Eset_auto2(H5E_DEFAULT, None, std::ptr::null_mut());
+    }
+
     return match hdf5::File::open(path.as_path()) {
         Ok(file) => {
             // TODO anything with plist? how to get encoding (not here)?
@@ -40,6 +45,7 @@ pub(crate) async fn read_hdf(path: Tagged<PathBuf>) -> ReturnValue {
             // return Ok(OutputStream::empty());
         }
         Err(e) => Err(ShellError::labeled_error(
+            // TODO {:?} shows flags etc
             format!("Cannot open file as HDF5: {:?}", e),
             "error opening file",
             path.tag.clone(),
@@ -62,6 +68,7 @@ fn read_group(group: &hdf5::Group) -> Result<UntaggedValue, ShellError> {
 
     unsafe {
         // turn off unwanted output to stderr by hdf5 C library when calling .group below
+        //  TODO is there a way to not call this repeatedly?
         H5Eset_auto2(H5E_DEFAULT, None, std::ptr::null_mut());
     }
 
